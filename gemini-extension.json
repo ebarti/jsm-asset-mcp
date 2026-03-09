@@ -1,0 +1,44 @@
+{
+  "name": "jsm-asset-mcp",
+  "version": "0.1.0",
+  "description": "Jira Service Management Assets MCP Server",
+  "contextFileName": "GEMINI.md",
+  "mcpServers": {
+    "jsm-asset-mcp": {
+      "command": "uv",
+      "args": [
+        "run",
+        "${extensionPath}/main.py"
+      ],
+      "cwd": "${extensionPath}",
+      "env": {
+        "JIRA_DOMAIN": "${settings.JIRA_DOMAIN}",
+        "JIRA_EMAIL": "${settings.JIRA_EMAIL}",
+        "JIRA_API_TOKEN": "${settings.JIRA_API_TOKEN}",
+        "JIRA_WORKSPACE_ID": "${settings.JIRA_WORKSPACE_ID}"
+      }
+    }
+  },
+  "settings": [
+    {
+      "name": "Jira Domain",
+      "description": "Your Jira domain (e.g., your-company.atlassian.net)",
+      "envVar": "JIRA_DOMAIN"
+    },
+    {
+      "name": "Jira Email",
+      "description": "The email address associated with your Atlassian account",
+      "envVar": "JIRA_EMAIL"
+    },
+    {
+      "name": "Jira API Token",
+      "description": "Your Atlassian API Token",
+      "envVar": "JIRA_API_TOKEN"
+    },
+    {
+      "name": "Jira Workspace ID",
+      "description": "(Optional) Your Jira Assets Workspace ID. Can be left empty.",
+      "envVar": "JIRA_WORKSPACE_ID"
+    }
+  ]
+}
