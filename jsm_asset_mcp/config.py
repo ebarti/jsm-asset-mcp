@@ -1,11 +1,10 @@
-"""Immutable, validated configuration loaded from environment variables."""
+"""Validated configuration loaded from environment variables."""
 
 from __future__ import annotations
 
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -13,18 +12,17 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Settings:
     """Application settings.
 
     All values are read from environment variables (or a ``.env`` file) at
-    construction time via :meth:`from_env`.  The instance is *frozen* — no
-    mutation after creation.
+    construction time via :meth:`from_env`.
 
     ``cloud_id`` and ``workspace_id`` support lazy auto-discovery: if they are
     not provided at construction time they will be resolved on first access via
-    :meth:`resolve_cloud_id` / :meth:`resolve_workspace_id` and cached on the
-    returned *new* ``Settings`` instance.
+    :meth:`resolve_cloud_id` / :meth:`resolve_workspace_id` and cached on this
+    ``Settings`` instance.
     """
 
     # Jira core
@@ -105,8 +103,7 @@ class Settings:
         if not cloud_id:
             raise ValueError("Could not discover cloudId from Jira. Set JIRA_CLOUD_ID manually.")
 
-        # Cache on the instance by bypassing frozen (internal use only)
-        object.__setattr__(self, "jira_cloud_id", cloud_id)
+        self.jira_cloud_id = cloud_id
         logger.info("Auto-discovered cloudId: %s", cloud_id)
         return cloud_id
 
@@ -131,6 +128,6 @@ class Settings:
         if not workspace_id:
             raise ValueError("Could not discover workspaceId from Jira. Set JIRA_WORKSPACE_ID manually.")
 
-        object.__setattr__(self, "jira_workspace_id", workspace_id)
+        self.jira_workspace_id = workspace_id
         logger.info("Auto-discovered workspaceId: %s", workspace_id)
         return workspace_id

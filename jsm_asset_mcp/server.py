@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from mcp.server.fastmcp import FastMCP
 
 from jsm_asset_mcp import tools
@@ -35,8 +38,15 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     )
     toolset = tools.Toolset(deps)
 
+    @asynccontextmanager
+    async def lifespan(_: FastMCP) -> AsyncIterator[dict[str, object]]:
+        try:
+            yield {}
+        finally:
+            client.close()
+
     # Create the MCP server and register every tool
-    mcp = FastMCP("Jira Assets Server")
+    mcp = FastMCP("Jira Assets Server", lifespan=lifespan)
     for tool_fn in toolset.all_tools:
         mcp.tool()(tool_fn)
 

@@ -23,6 +23,23 @@ class AssetsClient:
         self._settings = settings
         self._http = httpx.Client(timeout=_TIMEOUT, headers=_HEADERS)
 
+    def close(self) -> None:
+        """Close the underlying persistent HTTP client."""
+        self._http.close()
+
+    def __enter__(self) -> AssetsClient:
+        """Return the client for use as a context manager."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        """Ensure the underlying HTTP client is closed on context exit."""
+        self.close()
+
     # ── URL helpers ──────────────────────────────────────────────────────
 
     @property

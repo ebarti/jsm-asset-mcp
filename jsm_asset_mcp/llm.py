@@ -131,6 +131,31 @@ def get_client(settings: Settings) -> anthropic.Anthropic:
 
 # ── AQL translation ─────────────────────────────────────────────────────
 
+def _message_text(content: list[object]) -> str:
+    text_blocks = []
+    for block in content:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            text_blocks.append(text)
+
+    text = "\n".join(text_blocks).strip()
+    if not text:
+        raise ValueError("Anthropic response did not contain text content.")
+    return text
+
+
+def _strip_markdown_fence(text: str) -> str:
+    if not text.startswith("```"):
+        return text
+
+    lines = text.splitlines()
+    if lines:
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
 def translate_to_aql(
     question: str,
     schema_summary: str,
@@ -155,8 +180,4 @@ def translate_to_aql(
         ],
     )
 
-    aql = message.content[0].text.strip()
-    # Strip markdown code fences if the model wraps the output
-    if aql.startswith("```"):
-        aql = aql.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    return aql
+    return _strip_markdown_fence(_message_text(message.content))

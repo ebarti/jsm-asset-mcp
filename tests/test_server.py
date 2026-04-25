@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ from jsm_asset_mcp.server import create_server
 class FakeClient:
     def __init__(self, settings: Settings) -> None:
         self.tag = settings.jira_domain
+        self.closed = False
 
     def get(self, path: str, params=None) -> dict:
         return {"tag": self.tag, "path": path, "params": params}
@@ -20,6 +22,9 @@ class FakeClient:
 
     def delete(self, path: str) -> dict:
         return {"tag": self.tag, "path": path}
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class FakeSchemaService:
@@ -56,14 +61,17 @@ class CreateServerTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-            result_one = await server_one._tool_manager.call_tool(
+            result_one = await server_one.call_tool(
                 "get_object",
                 {"object_id": "123"},
             )
-            result_two = await server_two._tool_manager.call_tool(
+            result_two = await server_two.call_tool(
                 "get_object",
                 {"object_id": "123"},
             )
 
-        self.assertEqual(result_one["tag"], "one.example.atlassian.net")
-        self.assertEqual(result_two["tag"], "two.example.atlassian.net")
+        payload_one = json.loads(result_one[0].text)
+        payload_two = json.loads(result_two[0].text)
+
+        self.assertEqual(payload_one["tag"], "one.example.atlassian.net")
+        self.assertEqual(payload_two["tag"], "two.example.atlassian.net")
