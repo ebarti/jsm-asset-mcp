@@ -15,7 +15,12 @@
         "JIRA_DOMAIN": "${settings.JIRA_DOMAIN}",
         "JIRA_EMAIL": "${settings.JIRA_EMAIL}",
         "JIRA_API_TOKEN": "${settings.JIRA_API_TOKEN}",
-        "JIRA_WORKSPACE_ID": "${settings.JIRA_WORKSPACE_ID}"
+        "JIRA_WORKSPACE_ID": "${settings.JIRA_WORKSPACE_ID}",
+        "ANTHROPIC_PROVIDER": "${settings.ANTHROPIC_PROVIDER}",
+        "ANTHROPIC_API_KEY": "${settings.ANTHROPIC_API_KEY}",
+        "ANTHROPIC_VERTEX_PROJECT_ID": "${settings.ANTHROPIC_VERTEX_PROJECT_ID}",
+        "ANTHROPIC_VERTEX_REGION": "${settings.ANTHROPIC_VERTEX_REGION}",
+        "AWS_REGION": "${settings.AWS_REGION}"
       }
     }
   },
@@ -33,12 +38,39 @@
     {
       "name": "Jira API Token",
       "description": "Your Atlassian API Token",
-      "envVar": "JIRA_API_TOKEN"
+      "envVar": "JIRA_API_TOKEN",
+      "sensitive": true
     },
     {
       "name": "Jira Workspace ID",
       "description": "(Optional) Your Jira Assets Workspace ID. Can be left empty.",
       "envVar": "JIRA_WORKSPACE_ID"
+    },
+    {
+      "name": "Anthropic Provider",
+      "description": "Authentication provider: 'anthropic' (default), 'vertex' (Google Vertex AI), or 'bedrock' (Amazon Bedrock)",
+      "envVar": "ANTHROPIC_PROVIDER"
+    },
+    {
+      "name": "Anthropic API Key",
+      "description": "(Required for provider=anthropic) Your Anthropic API key",
+      "envVar": "ANTHROPIC_API_KEY",
+      "sensitive": true
+    },
+    {
+      "name": "Vertex Project ID",
+      "description": "(Required for provider=vertex) Your GCP project ID",
+      "envVar": "ANTHROPIC_VERTEX_PROJECT_ID"
+    },
+    {
+      "name": "Vertex Region",
+      "description": "(Optional for provider=vertex) GCP region, defaults to us-east5",
+      "envVar": "ANTHROPIC_VERTEX_REGION"
+    },
+    {
+      "name": "AWS Region",
+      "description": "(Optional for provider=bedrock) AWS region, defaults to us-east-1",
+      "envVar": "AWS_REGION"
     }
   ]
 }
