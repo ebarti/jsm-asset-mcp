@@ -2,6 +2,22 @@
 
 This extension provides an MCP server for interacting with Jira Service Management (JSM) Assets.
 
+## Project Structure
+
+The codebase is a Python package (`jsm_asset_mcp/`) with the following modules:
+
+| Module | Responsibility |
+|---|---|
+| `config.py` | Immutable `Settings` dataclass loaded from env vars |
+| `client.py` | `AssetsClient` — thin httpx wrapper with auth and base URL |
+| `cache.py` | Generic `TTLCache` — domain-agnostic |
+| `schema.py` | `SchemaService` — schema introspection and summary builder |
+| `llm.py` | Anthropic client factory + natural-language → AQL translation |
+| `tools.py` | All MCP tool definitions (thin orchestration) |
+| `server.py` | `create_server()` factory — wires dependencies, returns FastMCP |
+
+Entrypoint: `main.py` calls `create_server().run()`.
+
 ## Core Capabilities
 - **Query Assets**: Use `execute_aql` to query objects based on Asset Query Language (AQL).
 - **Retrieve Assets**: Use `get_object` to fetch specific details about an asset by ID.

@@ -1,11 +1,16 @@
 [project]
 name = "jsm-asset-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP server for Jira Service Management Assets (Insight) API"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
+    "anthropic>=0.52.0",
     "httpx>=0.28.1",
     "mcp>=1.26.0",
     "python-dotenv>=1.2.1",
 ]
+
+[project.optional-dependencies]
+vertex = ["anthropic[vertex]>=0.52.0"]
+bedrock = ["anthropic[bedrock]>=0.52.0"]
