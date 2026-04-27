@@ -8,7 +8,7 @@ The codebase is a Python package (`jsm_asset_mcp/`) with the following modules:
 
 | Module | Responsibility |
 |---|---|
-| `config.py` | Immutable `Settings` dataclass loaded from env vars |
+| `config.py` | `Settings` dataclass loaded from env vars, with cached/discovered Jira IDs |
 | `client.py` | `AssetsClient` — thin httpx wrapper with auth and base URL |
 | `cache.py` | Generic `TTLCache` — domain-agnostic |
 | `schema.py` | `SchemaService` — schema introspection and summary builder |

@@ -10,6 +10,7 @@ import httpx
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+_DISCOVERY_TIMEOUT = 30
 
 
 @dataclass
@@ -97,7 +98,7 @@ class Settings:
             raise ValueError("JIRA_DOMAIN environment variable is required if JIRA_CLOUD_ID is not provided.")
 
         url = f"https://{self.jira_domain}/_edge/tenant_info"
-        response = httpx.get(url)
+        response = httpx.get(url, timeout=_DISCOVERY_TIMEOUT)
         response.raise_for_status()
         cloud_id = response.json().get("cloudId")
         if not cloud_id:
@@ -116,7 +117,12 @@ class Settings:
             raise ValueError("JIRA_DOMAIN environment variable is required if JIRA_WORKSPACE_ID is not provided.")
 
         url = f"https://{self.jira_domain}/rest/servicedeskapi/assets/workspace"
-        response = httpx.get(url, auth=self.auth, headers={"Accept": "application/json"})
+        response = httpx.get(
+            url,
+            auth=self.auth,
+            headers={"Accept": "application/json"},
+            timeout=_DISCOVERY_TIMEOUT,
+        )
         response.raise_for_status()
 
         data = response.json()
