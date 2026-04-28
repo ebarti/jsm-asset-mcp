@@ -22,39 +22,97 @@ Your job is to translate natural language questions into valid AQL queries.
 
 ## AQL Syntax Reference
 
-AQL queries filter objects in Jira Assets. Key syntax:
+AQL queries filter Jira Assets objects. The basic form is:
+`<attribute-or-keyword> <operator> <value-or-function>`.
+
+### Exact Syntax Rules
+- AQL keywords and operators are not case-sensitive, but always preserve the exact
+  object type, attribute, status, user, group, project, and reference type names
+  from the schema or user request.
+- Quote any attribute or value containing spaces: `"Belongs to Department"`,
+  `"Ted Anderson"`, `objectType = "Asset Details"`.
+- Escape double quotes inside quoted attributes or values with a backslash.
+  Example: `Name = "15\\" Screen"`.
+- Use only attributes that exist in the supplied schema, or documented AQL
+  keywords/built-in attributes.
+
+### Dot Notation
+- Use dot notation to traverse referenced objects:
+  `"Belongs to Department".Name = "HR"`.
+- Quote any segment that contains spaces.
+- Dot notation can also be used in `ORDER BY` for reference attributes.
+
+### Keywords and Built-ins
+- `objectSchema`: schema name, e.g. `objectSchema = "ITSM Schema"`.
+- `objectSchemaId`: schema IDs, e.g. `objectSchemaId IN (1, 2)`.
+- `objectType`: object type name, e.g. `objectType = "Host"`.
+- `objectTypeId`: object type IDs, e.g. `objectTypeId IN (1, 2)`.
+- `object`: use with reference functions, e.g. `object HAVING inboundReferences()`.
+- `objectId`: numeric ID from the object key without the schema prefix.
+- `Key`: use the full object key, e.g. `Key = "ITSM-1111"`.
+- Common built-ins include `Name`, `Label`, `Key`, `Created`, and `Updated`.
 
 ### Operators
-- `=` : Exact match (e.g., `objectType = "Server"`)
-- `!=` : Not equal
-- `LIKE` : Contains substring, case-insensitive (e.g., `Name LIKE "prod"`)
-- `NOT LIKE` : Does not contain
-- `STARTS WITH` / `NOT STARTS WITH` : Prefix match
-- `>`, `<`, `>=`, `<=` : Numeric/date comparisons
-- `IN (val1, val2)` / `NOT IN (val1, val2)` : Set membership
-- `IS EMPTY` / `IS NOT EMPTY` : Null checks
-- `HAVING` : For referenced objects (e.g., `"OS" HAVING (Name = "Windows")`)
+- `=`: case-insensitive equality.
+- `==`: case-sensitive equality.
+- `!=`: inequality.
+- `<`, `>`, `<=`, `>=`: numeric or date comparisons.
+- `LIKE` / `NOT LIKE`: substring match or exclusion, case-insensitive.
+- `IN (...)` / `NOT IN (...)`: set membership.
+- `STARTSWITH` / `ENDSWITH`: case-insensitive prefix/suffix match.
+- `IS EMPTY` / `IS NOT EMPTY`: missing or present values.
+- `HAVING` / `NOT HAVING`: use with reference and user/group functions.
+- `.`: traverse referenced object attributes.
+- Combine expressions with `AND`, `OR`, and parentheses.
 
-### Logical Operators
-- `AND` : Both conditions must match
-- `OR` : Either condition can match
-- Parentheses `()` for grouping
+### Date and Time Functions
+- Supported functions: `now()`, `startOfDay()`, `endOfDay()`, `startOfWeek()`,
+  `endOfWeek()`, `startOfMonth()`, `endOfMonth()`, `startOfYear()`,
+  `endOfYear()`.
+- Relative offsets use `m`, `h`, `d`, and `w`, e.g. `Created > "now(-2h 15m)"`
+  or `"Employment End Date" < endOfMonth(-90d)`.
 
-### Special Attributes
-- `objectType` : The type of the object (always use exact match with `=`)
-- `objectId` : The unique ID of the object
-- `objectSchema` : The schema containing the object
-- `Name` / `Label` / `Key` : Common built-in attributes
+### User, Group, and Project Functions
+- User attributes: `currentUser()`, `currentReporter()`, `user("admin", "manager")`.
+- Group lookup for User attributes: `User IN group("jira-users")`.
+- User lookup for Group attributes: `Group HAVING user("currentReporter()")`.
+- Project attributes: `currentProject()` only when the query runs in a ticket context.
 
-### Sorting
-- `ORDER BY <attribute> ASC|DESC`
+### Reference Functions
+- `inboundReferences(AQL)` / `inR(AQL)`: objects with inbound references matching
+  the nested AQL. Empty arguments match any inbound reference.
+- `inboundReferences(AQL, referenceTypes)` / `inR(AQL, refTypes)`: also limit by
+  reference type with `refType IN ("Depends", "Installed")`.
+- `outboundReferences(AQL)` / `outR(AQL)`: objects with outbound references
+  matching the nested AQL. Empty arguments match any outbound reference.
+- `outboundReferences(AQL, referenceTypes)` / `outR(AQL, refTypes)`: also limit
+  by reference type with `refType IN ("Location")`.
+- Use `object HAVING ...` or `object NOT HAVING ...` around reference functions.
+
+### Jira Ticket and Object-Type Functions
+- `connectedTickets(JQL query)`: objects with connected Jira tickets matching the
+  JQL, e.g. `object HAVING connectedTickets(labels IS EMPTY)`.
+- `objectTypeAndChildren(Name)` or `objectTypeAndChildren(ID)`: include an object
+  type and its child object types, e.g.
+  `objectType IN objectTypeAndChildren("Asset Details")`.
+
+### Placeholders
+- Preserve Assets placeholders exactly when provided by the user or context, such
+  as `${MyCustomField${0}}` or `${Portfolios.label${0}}`.
+- Placeholders can be combined with reference functions and dot notation.
+
+### Ordering
+- Append `ORDER BY <AttributeName|label> ASC|DESC`.
+- If omitted, Assets defaults to ascending order by the object type label.
+- Use dot notation for reference attributes in ordering.
+- Missing values appear first in ascending order.
+- Only one order attribute is supported.
 
 ### Important Rules
-- String values must be in double quotes: `Name = "my-server"`
-- Object type names are case-sensitive and must match exactly as defined in the schema
+- String values with spaces or special characters must be in double quotes:
+  `Name = "my-server"`, `"Operating System" = "Ubuntu (64-bit)"`.
 - Use `LIKE` for partial/fuzzy text matching
 - Use `=` only when you're confident the user wants an exact value
-- For referenced object attributes, use `HAVING`: `"Department" HAVING (Name = "Engineering")`
 - When the user mentions a plural form (e.g., "laptops"), map it to the singular object type name from the schema
 - If the question is ambiguous about which object type to query, pick the most likely one based on context
 - If no object type can be determined, search across all objects using attribute filters only

@@ -41,7 +41,7 @@ class Settings:
 
     # Vertex AI
     anthropic_vertex_project_id: str = ""
-    anthropic_vertex_region: str = "us-east5"
+    anthropic_vertex_region: str = "global"
 
     # Bedrock
     aws_region: str = "us-east-1"
@@ -49,9 +49,9 @@ class Settings:
     # Model names per provider (not user-configurable, but here for clarity)
     _model_names: dict[str, str] = field(
         default_factory=lambda: {
-            "anthropic": "claude-haiku-4-5-20251001",
-            "vertex": "claude-haiku-4-5-20251001",
-            "bedrock": "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic": "claude-opus-4-7",
+            "vertex": "claude-opus-4-7",
+            "bedrock": "anthropic.claude-opus-4-7",
         },
         repr=False,
     )
@@ -71,7 +71,7 @@ class Settings:
             anthropic_provider=os.environ.get("ANTHROPIC_PROVIDER", "anthropic").lower(),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             anthropic_vertex_project_id=os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", ""),
-            anthropic_vertex_region=os.environ.get("ANTHROPIC_VERTEX_REGION", "us-east5"),
+            anthropic_vertex_region=os.environ.get("ANTHROPIC_VERTEX_REGION", "global"),
             aws_region=os.environ.get("AWS_REGION", "us-east-1"),
         )
 

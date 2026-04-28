@@ -5,6 +5,20 @@ from jsm_asset_mcp.config import Settings
 
 
 class SettingsDiscoveryTests(unittest.TestCase):
+    def test_default_model_names_use_claude_opus_4_7_only(self) -> None:
+        self.assertEqual(Settings(anthropic_provider="anthropic").model_name, "claude-opus-4-7")
+        self.assertEqual(Settings(anthropic_provider="vertex").model_name, "claude-opus-4-7")
+        self.assertEqual(
+            Settings(anthropic_provider="bedrock").model_name,
+            "anthropic.claude-opus-4-7",
+        )
+
+    def test_unknown_provider_model_falls_back_to_claude_opus_4_7(self) -> None:
+        self.assertEqual(Settings(anthropic_provider="unknown").model_name, "claude-opus-4-7")
+
+    def test_vertex_region_defaults_to_global(self) -> None:
+        self.assertEqual(Settings().anthropic_vertex_region, "global")
+
     def test_resolve_cloud_id_uses_timeout(self) -> None:
         response = Mock()
         response.json.return_value = {"cloudId": "cloud-123"}

@@ -71,7 +71,7 @@
     },
     {
       "name": "Vertex Region",
-      "description": "(Optional for provider=vertex) GCP region, defaults to us-east5",
+      "description": "(Optional for provider=vertex) GCP region, defaults to global",
       "envVar": "ANTHROPIC_VERTEX_REGION"
     },
     {

@@ -66,7 +66,7 @@ gcloud auth application-default login
 ```env
 ANTHROPIC_PROVIDER=vertex
 ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id
-ANTHROPIC_VERTEX_REGION=us-east5   # optional, defaults to us-east5
+ANTHROPIC_VERTEX_REGION=global   # optional, defaults to global
 ```
 
 #### Option C: Amazon Bedrock
@@ -184,10 +184,10 @@ See the included `gemini-extension.json` for Gemini-specific configuration.
 
 ## Natural Language Search
 
-The `search_assets` tool lets you query assets without knowing AQL syntax. It uses AI (Claude Haiku) to translate natural language into AQL:
+The `search_assets` tool lets you query assets without knowing AQL syntax. It uses AI (Claude Opus 4.7) to translate natural language into AQL:
 
 1. Inspects and caches the full schema (object types, attributes, and their data types)
-2. Sends the schema context and your question to Claude Haiku for intelligent AQL generation
+2. Sends the schema context and your question to Claude Opus 4.7 for intelligent AQL generation
 3. Executes the generated AQL query
 4. Returns results along with the generated AQL for transparency
 
