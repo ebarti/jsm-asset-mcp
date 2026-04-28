@@ -12,15 +12,16 @@
       ],
       "cwd": "${extensionPath}",
       "env": {
-        "JIRA_DOMAIN": "${settings.JIRA_DOMAIN}",
-        "JIRA_EMAIL": "${settings.JIRA_EMAIL}",
-        "JIRA_API_TOKEN": "${settings.JIRA_API_TOKEN}",
-        "JIRA_WORKSPACE_ID": "${settings.JIRA_WORKSPACE_ID}",
-        "ANTHROPIC_PROVIDER": "${settings.ANTHROPIC_PROVIDER}",
-        "ANTHROPIC_API_KEY": "${settings.ANTHROPIC_API_KEY}",
-        "ANTHROPIC_VERTEX_PROJECT_ID": "${settings.ANTHROPIC_VERTEX_PROJECT_ID}",
-        "ANTHROPIC_VERTEX_REGION": "${settings.ANTHROPIC_VERTEX_REGION}",
-        "AWS_REGION": "${settings.AWS_REGION}"
+        "JIRA_DOMAIN": "${JIRA_DOMAIN}",
+        "JIRA_EMAIL": "${JIRA_EMAIL}",
+        "JIRA_API_TOKEN": "${JIRA_API_TOKEN}",
+        "JIRA_WORKSPACE_ID": "${JIRA_WORKSPACE_ID}",
+        "JIRA_CLOUD_ID": "${JIRA_CLOUD_ID}",
+        "ANTHROPIC_PROVIDER": "${ANTHROPIC_PROVIDER}",
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+        "ANTHROPIC_VERTEX_PROJECT_ID": "${ANTHROPIC_VERTEX_PROJECT_ID}",
+        "ANTHROPIC_VERTEX_REGION": "${ANTHROPIC_VERTEX_REGION}",
+        "AWS_REGION": "${AWS_REGION}"
       }
     }
   },
@@ -45,6 +46,11 @@
       "name": "Jira Workspace ID",
       "description": "(Optional) Your Jira Assets Workspace ID. Can be left empty.",
       "envVar": "JIRA_WORKSPACE_ID"
+    },
+    {
+      "name": "Jira Cloud ID",
+      "description": "(Optional) Your Jira Cloud ID. Can be left empty when Jira Domain is set.",
+      "envVar": "JIRA_CLOUD_ID"
     },
     {
       "name": "Anthropic Provider",
