@@ -14,6 +14,15 @@ from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.schema import SchemaService
 
 
+def _is_last_page(result: dict) -> bool:
+    is_last = result.get("isLast")
+    if isinstance(is_last, bool):
+        return is_last
+    if isinstance(is_last, str):
+        return is_last.lower() == "true"
+    return False
+
+
 @dataclass
 class Dependencies:
     """Runtime dependencies injected by the server factory."""
@@ -56,21 +65,21 @@ class Toolset:
         start_at: int = 0,
         max_results: int = 25,
         include_attributes: bool = True,
+        fetch_all: bool = False,
     ) -> dict:
         """Execute an AQL (Asset Query Language) query to search for objects.
 
         Args:
             query: The AQL query string (e.g. 'objectType = "Laptop"', 'Name LIKE "server"').
             start_at: Starting index for pagination (default: 0).
-            max_results: Maximum results to return (default: 25).
+            max_results: Page size for each request (default: 25).
             include_attributes: Include object attributes in response (default: True).
+            fetch_all: When true, paginate until all matching objects are returned.
         """
-        params = {
-            "startAt": start_at,
-            "maxResults": max_results,
-            "includeAttributes": str(include_attributes).lower(),
-        }
-        return self.deps.client.post("/object/aql", payload={"qlQuery": query}, params=params)
+        if fetch_all:
+            return self._fetch_all_aql(query, start_at, max_results, include_attributes)
+
+        return self._fetch_aql_page(query, start_at, max_results, include_attributes)
 
     def get_object(self, object_id: str) -> dict:
         """Retrieve a single asset object by its ID.
@@ -164,31 +173,122 @@ class Toolset:
 
     # ── Natural language search ──────────────────────────────────────────
 
-    def search_assets(self, question: str, max_results: int = 25) -> dict:
+    def _translate_question(self, question: str) -> llm.SearchPlan:
+        schema_summary = self.deps.schema.build_summary()
+        return llm.translate_to_search_plan(question, schema_summary, self.deps.settings)
+
+    def _fetch_aql_page(
+        self,
+        query: str,
+        start_at: int,
+        max_results: int,
+        include_attributes: bool,
+    ) -> dict:
+        params = {
+            "startAt": start_at,
+            "maxResults": max_results,
+            "includeAttributes": str(include_attributes).lower(),
+        }
+        return self.deps.client.post("/object/aql", payload={"qlQuery": query}, params=params)
+
+    def _fetch_all_aql(
+        self,
+        query: str,
+        start_at: int,
+        max_results: int,
+        include_attributes: bool,
+    ) -> dict:
+        pages = []
+        next_start = start_at
+
+        while True:
+            page = self._fetch_aql_page(query, next_start, max_results, include_attributes)
+            pages.append(page)
+
+            values = page.get("values", [])
+            if _is_last_page(page):
+                break
+            if not values:
+                break
+
+            page_start = int(page.get("startAt", next_start))
+            next_start = page_start + len(values)
+            total = page.get("total")
+            if isinstance(total, int) and next_start >= total:
+                break
+
+        return self._merge_aql_pages(pages, max_results)
+
+    def _merge_aql_pages(self, pages: list[dict], page_size: int) -> dict:
+        if not pages:
+            return {
+                "startAt": 0,
+                "maxResults": 0,
+                "total": 0,
+                "isLast": True,
+                "values": [],
+                "_page_size": page_size,
+                "_page_count": 0,
+                "_returned_count": 0,
+                "_pagination_complete": True,
+            }
+
+        result = dict(pages[0])
+        values = []
+        for page in pages:
+            values.extend(page.get("values", []))
+
+        total = pages[-1].get("total", result.get("total"))
+        complete = _is_last_page(pages[-1])
+        if isinstance(total, int):
+            complete = complete or len(values) >= total
+
+        result["startAt"] = pages[0].get("startAt", 0)
+        result["maxResults"] = len(values)
+        result["total"] = total
+        result["isLast"] = complete
+        result["values"] = values
+        result["_page_size"] = page_size
+        result["_page_count"] = len(pages)
+        result["_returned_count"] = len(values)
+        result["_pagination_complete"] = complete
+        return result
+
+    def search_assets(self, question: str, max_results: int = 25, fetch_all: bool = False) -> dict:
         """Search assets using natural language. The server translates your question into an
         AQL query by first inspecting the schema to understand available object types and
         attributes, then constructing the appropriate query.
 
+        Claude decides whether the user's question asks for an explicit result limit
+        or all matching objects. If it does not, max_results is used as the default
+        page size and single-page result limit.
+
         Examples:
             - "Find all laptops assigned to John"
+            - "Show the first 10 MacBook laptops"
             - "Show servers in the Sydney data center"
             - "List all software licenses expiring this month"
             - "Which network switches have status Active?"
 
         Args:
             question: A natural language description of the assets you want to find.
-            max_results: Maximum results to return (default: 25).
+            max_results: Default result limit/page size when the question does not
+                specify a limit (default: 25).
+            fetch_all: When true, paginate until all matching objects are returned.
         """
-        schema_summary = self.deps.schema.build_summary()
-        aql = llm.translate_to_aql(question, schema_summary, self.deps.settings)
+        plan = self._translate_question(question)
+        page_size = plan.max_results or max_results
 
-        result = self.deps.client.post("/object/aql", payload={"qlQuery": aql}, params={
-            "startAt": 0,
-            "maxResults": max_results,
-            "includeAttributes": "true",
-        })
-        result["_generated_aql"] = aql
+        if fetch_all or plan.fetch_all:
+            result = self._fetch_all_aql(plan.aql, 0, page_size, include_attributes=True)
+        else:
+            result = self._fetch_aql_page(plan.aql, 0, page_size, include_attributes=True)
+
+        result["_generated_aql"] = plan.aql
         result["_original_question"] = question
+        result["_llm_max_results"] = plan.max_results
+        result["_llm_fetch_all"] = plan.fetch_all
+        result["_result_type"] = "objects"
         return result
 
     # ── Related data ─────────────────────────────────────────────────────

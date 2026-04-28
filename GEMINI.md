@@ -20,6 +20,7 @@ Entrypoint: `main.py` calls `create_server().run()`.
 
 ## Core Capabilities
 - **Query Assets**: Use `execute_aql` to query objects based on Asset Query Language (AQL).
+- **Search Assets**: Use `search_assets` for natural-language object searches. Claude decides the AQL query and result limit; if the user asks for all matching objects, the tool paginates through all AQL result pages.
 - **Retrieve Assets**: Use `get_object` to fetch specific details about an asset by ID.
 - **Update Assets**: Use `update_object` to modify an existing asset's attributes.
 

@@ -191,6 +191,8 @@ The `search_assets` tool lets you query assets without knowing AQL syntax. It us
 3. Executes the generated AQL query
 4. Returns results along with the generated AQL for transparency
 
+For natural-language searches, Claude returns both the AQL query and the intended result limit. If the user asks for all matching objects, `search_assets` paginates through each `/object/aql` page until all matches are returned. If the user asks for a specific number, that number is used as the result limit. If no limit is specified, the tool's `max_results` parameter is used as the default.
+
 Because the translation is AI-powered, it handles complex queries, synonyms, implied filters, and ambiguous phrasing far better than keyword matching. It understands your schema and can reason about which object types and attributes to query.
 
 **Examples:**

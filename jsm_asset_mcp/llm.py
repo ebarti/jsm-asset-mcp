@@ -6,7 +6,9 @@ model selection, the AQL system prompt, and response parsing.
 
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import dataclass
 
 import anthropic
 
@@ -16,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # ── AQL System Prompt ────────────────────────────────────────────────────
 
-AQL_SYSTEM_PROMPT = """\
+AQL_REFERENCE = """\
 You are an AQL (Asset Query Language) expert for Jira Service Management Assets.
 Your job is to translate natural language questions into valid AQL queries.
 
@@ -88,10 +90,13 @@ AQL queries filter Jira Assets objects. The basic form is:
 - `outboundReferences(AQL, referenceTypes)` / `outR(AQL, refTypes)`: also limit
   by reference type with `refType IN ("Location")`.
 - Use `object HAVING ...` or `object NOT HAVING ...` around reference functions.
+- Reference function AQL arguments can contain other reference functions.
 
 ### Jira Ticket and Object-Type Functions
 - `connectedTickets(JQL query)`: objects with connected Jira tickets matching the
   JQL, e.g. `object HAVING connectedTickets(labels IS EMPTY)`.
+- If the user asks only for objects with any connected Jira ticket, use
+  `connectedTickets()` where an empty argument is accepted by the Assets context.
 - `objectTypeAndChildren(Name)` or `objectTypeAndChildren(ID)`: include an object
   type and its child object types, e.g.
   `objectType IN objectTypeAndChildren("Asset Details")`.
@@ -106,6 +111,8 @@ AQL queries filter Jira Assets objects. The basic form is:
 - If omitted, Assets defaults to ascending order by the object type label.
 - Use dot notation for reference attributes in ordering.
 - Missing values appear first in ascending order.
+- The ordered attribute must exist in the schema; if it is not found in the
+  result set, Assets may return an arbitrary order.
 - Only one order attribute is supported.
 
 ### Important Rules
@@ -113,14 +120,71 @@ AQL queries filter Jira Assets objects. The basic form is:
   `Name = "my-server"`, `"Operating System" = "Ubuntu (64-bit)"`.
 - Use `LIKE` for partial/fuzzy text matching
 - Use `=` only when you're confident the user wants an exact value
+- Do not invent object schema IDs or object type IDs. Prefer object schema/type
+  names unless the user or schema context provides IDs.
 - When the user mentions a plural form (e.g., "laptops"), map it to the singular object type name from the schema
 - If the question is ambiguous about which object type to query, pick the most likely one based on context
 - If no object type can be determined, search across all objects using attribute filters only
+"""
+
+AQL_SYSTEM_PROMPT = AQL_REFERENCE + """\
 
 ## Output Format
 
 Respond with ONLY the AQL query string. No explanation, no markdown, no quotes around the entire query.
 """
+
+SEARCH_PLAN_SYSTEM_PROMPT = AQL_REFERENCE + """\
+
+## Result Limit Planning
+
+In addition to the AQL query, decide how many matching objects the caller needs:
+- If the user asks for all, every, complete, full, unlimited, or no-limit results,
+  set `fetch_all` to true and `max_results` to null.
+- If the user asks to count objects, asks "how many", or asks for a total, set
+  `fetch_all` to true and `max_results` to null so the caller can inspect every
+  matching object.
+- If the user explicitly asks for a specific number of results, set `max_results`
+  to that positive integer and `fetch_all` to false.
+- If the user does not specify a result limit, set `max_results` to null and
+  `fetch_all` to false. The caller will use its default max_results parameter.
+"""
+
+SEARCH_PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "aql": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The generated Assets Query Language query.",
+        },
+        "max_results": {
+            "anyOf": [
+                {"type": "integer", "minimum": 1},
+                {"type": "null"},
+            ],
+            "description": (
+                "Positive integer when the user explicitly asks for a fixed number "
+                "of results; null when the caller should use its default or fetch all."
+            ),
+        },
+        "fetch_all": {
+            "type": "boolean",
+            "description": "True when the user asks for every matching object.",
+        },
+    },
+    "required": ["aql", "max_results", "fetch_all"],
+    "additionalProperties": False,
+}
+
+
+@dataclass(frozen=True)
+class SearchPlan:
+    """AQL plus LLM-selected result limit semantics."""
+
+    aql: str
+    max_results: int | None = None
+    fetch_all: bool = False
 
 
 # ── Client factory ───────────────────────────────────────────────────────
@@ -214,6 +278,27 @@ def _strip_markdown_fence(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _parse_search_plan(text: str) -> SearchPlan:
+    payload = json.loads(_strip_markdown_fence(text))
+    if not isinstance(payload, dict):
+        raise ValueError("Anthropic response must be a JSON object.")
+
+    aql = payload.get("aql")
+    if not isinstance(aql, str) or not aql.strip():
+        raise ValueError("Anthropic response did not contain a non-empty AQL query.")
+
+    max_results = payload.get("max_results")
+    if max_results is not None:
+        if not isinstance(max_results, int) or max_results <= 0:
+            raise ValueError("Anthropic response max_results must be a positive integer or null.")
+
+    fetch_all = payload.get("fetch_all", False)
+    if not isinstance(fetch_all, bool):
+        raise ValueError("Anthropic response fetch_all must be a boolean.")
+
+    return SearchPlan(aql=aql.strip(), max_results=max_results, fetch_all=fetch_all)
+
+
 def translate_to_aql(
     question: str,
     schema_summary: str,
@@ -239,3 +324,36 @@ def translate_to_aql(
     )
 
     return _strip_markdown_fence(_message_text(message.content))
+
+
+def translate_to_search_plan(
+    question: str,
+    schema_summary: str,
+    settings: Settings,
+) -> SearchPlan:
+    """Translate a natural-language question into AQL and result-limit semantics."""
+    client = get_client(settings)
+
+    message = client.messages.create(
+        model=settings.model_name,
+        max_tokens=768,
+        system=SEARCH_PLAN_SYSTEM_PROMPT,
+        output_config={
+            "format": {
+                "type": "json_schema",
+                "schema": SEARCH_PLAN_SCHEMA,
+            }
+        },
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"## Available Schema\n\n{schema_summary}\n\n"
+                    f"---\n\n"
+                    f"Translate this question into a search plan:\n{question}"
+                ),
+            }
+        ],
+    )
+
+    return _parse_search_plan(_message_text(message.content))
