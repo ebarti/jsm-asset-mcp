@@ -8,6 +8,7 @@
       "command": "uv",
       "args": [
         "run",
+        "--all-extras",
         "${extensionPath}/main.py"
       ],
       "cwd": "${extensionPath}",
