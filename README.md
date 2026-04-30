@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server for interacting with the Jira Cloud Asset
 - [`uv`](https://docs.astral.sh/uv/) (recommended) or `pip`
 - Jira Cloud account with JSM Premium or Enterprise (Assets feature)
 - Jira API token ([create one here](https://id.atlassian.com/manage-profile/security/api-tokens))
-- **One** of the following for AI-powered natural language search:
+- **One** of the following for Claude Agent SDK-powered natural language search:
   - Anthropic API key (direct API access)
   - Google Cloud project with Vertex AI enabled
   - AWS account with Bedrock access
@@ -37,9 +37,9 @@ JIRA_API_TOKEN=your_jira_api_token
 # JIRA_WORKSPACE_ID=your_workspace_id
 ```
 
-### 3. Configure Anthropic provider
+### 3. Configure Claude provider
 
-The `search_assets` tool uses Claude to translate natural language into AQL queries. You can authenticate via the Anthropic API directly, or through Google Vertex AI or Amazon Bedrock.
+The `search_assets` tool uses the Claude Agent SDK to translate natural language into AQL queries with structured output. You can authenticate via the Anthropic API directly, or through Google Vertex AI or Amazon Bedrock.
 
 Set `ANTHROPIC_PROVIDER` to choose your authentication method:
 
@@ -51,12 +51,6 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 ```
 
 #### Option B: Google Vertex AI
-
-Install the Vertex extra:
-```bash
-uv pip install 'anthropic[vertex]'
-# or: pip install '.[vertex]'
-```
 
 Authenticate with Google Cloud:
 ```bash
@@ -70,12 +64,6 @@ ANTHROPIC_VERTEX_REGION=global   # optional, defaults to global
 ```
 
 #### Option C: Amazon Bedrock
-
-Install the Bedrock extra:
-```bash
-uv pip install 'anthropic[bedrock]'
-# or: pip install '.[bedrock]'
-```
 
 Ensure AWS credentials are configured (via `~/.aws/credentials`, env vars, or IAM role).
 
@@ -191,7 +179,7 @@ The `search_assets` tool lets you query assets without knowing AQL syntax. It us
 3. Executes the generated AQL query
 4. Returns results along with the generated AQL for transparency
 
-For natural-language searches, Claude returns both the AQL query and the intended result limit. If the user asks for all matching objects, `search_assets` paginates through each `/object/aql` page until all matches are returned. If the user asks for a specific number, that number is used as the result limit. If no limit is specified, the tool's `max_results` parameter is used as the default.
+For natural-language searches, Claude returns a structured search plan with the AQL query, result type, and intended result limit. If the user asks for a count or total, `search_assets` uses `/object/aql/totalcount` for the exact count. If the user asks for all matching objects, it paginates through each `/object/aql` page until all matches are returned. If the user asks for a specific number, that number is used as the result limit. If no limit is specified, the tool's `max_results` parameter is used as the default.
 
 Because the translation is AI-powered, it handles complex queries, synonyms, implied filters, and ambiguous phrasing far better than keyword matching. It understands your schema and can reason about which object types and attributes to query.
 

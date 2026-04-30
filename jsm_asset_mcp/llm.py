@@ -1,20 +1,24 @@
-"""LLM integration — Anthropic client factory and AQL translation.
+"""LLM integration — Claude Agent SDK AQL translation.
 
-Encapsulates everything related to the Anthropic SDK: provider switching,
-model selection, the AQL system prompt, and response parsing.
+Encapsulates provider environment selection, the AQL system prompt, and
+structured-output parsing for Claude Agent SDK calls.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
+import threading
+from collections.abc import Awaitable
 from dataclasses import dataclass
+from typing import Any
 
-import anthropic
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
 from jsm_asset_mcp.config import Settings
 
 logger = logging.getLogger(__name__)
+_MISSING = object()
 
 # ── AQL System Prompt ────────────────────────────────────────────────────
 
@@ -131,23 +135,39 @@ AQL_SYSTEM_PROMPT = AQL_REFERENCE + """\
 
 ## Output Format
 
-Respond with ONLY the AQL query string. No explanation, no markdown, no quotes around the entire query.
+Return the generated AQL in the structured output field. Do not include
+explanatory text.
 """
+
+AQL_QUERY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "aql": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The generated Assets Query Language query.",
+        },
+    },
+    "required": ["aql"],
+    "additionalProperties": False,
+}
 
 SEARCH_PLAN_SYSTEM_PROMPT = AQL_REFERENCE + """\
 
 ## Result Limit Planning
 
-In addition to the AQL query, decide how many matching objects the caller needs:
+In addition to the AQL query, decide whether the caller needs objects or a count,
+and how many matching objects the caller needs:
 - If the user asks for all, every, complete, full, unlimited, or no-limit results,
-  set `fetch_all` to true and `max_results` to null.
+  set `result_type` to "objects", `fetch_all` to true, and `max_results` to null.
 - If the user asks to count objects, asks "how many", or asks for a total, set
-  `fetch_all` to true and `max_results` to null so the caller can inspect every
-  matching object.
+  `result_type` to "count", `fetch_all` to false, and `max_results` to null so
+  the caller can use the Assets total-count endpoint without fetching objects.
 - If the user explicitly asks for a specific number of results, set `max_results`
-  to that positive integer and `fetch_all` to false.
+  to that positive integer, `result_type` to "objects", and `fetch_all` to false.
 - If the user does not specify a result limit, set `max_results` to null and
-  `fetch_all` to false. The caller will use its default max_results parameter.
+  `result_type` to "objects", and `fetch_all` to false. The caller will use its
+  default max_results parameter.
 """
 
 SEARCH_PLAN_SCHEMA = {
@@ -172,21 +192,18 @@ SEARCH_PLAN_SCHEMA = {
             "type": "boolean",
             "description": "True when the user asks for every matching object.",
         },
+        "result_type": {
+            "type": "string",
+            "enum": ["objects", "count"],
+            "description": (
+                "Use count when the user asks how many matching objects exist; "
+                "use objects for object search/list requests."
+            ),
+        },
     },
-    "required": ["aql", "max_results", "fetch_all"],
+    "required": ["aql", "max_results", "fetch_all", "result_type"],
     "additionalProperties": False,
 }
-
-SEARCH_PLAN_TOOL_NAME = "build_search_plan"
-SEARCH_PLAN_TOOL = {
-    "name": SEARCH_PLAN_TOOL_NAME,
-    "description": (
-        "Return the AQL query and result-limit behavior for a natural-language "
-        "Jira Service Management Assets search."
-    ),
-    "input_schema": SEARCH_PLAN_SCHEMA,
-}
-STRICT_SEARCH_PLAN_TOOL = {**SEARCH_PLAN_TOOL, "strict": True}
 
 
 @dataclass(frozen=True)
@@ -196,65 +213,47 @@ class SearchPlan:
     aql: str
     max_results: int | None = None
     fetch_all: bool = False
+    result_type: str = "objects"
 
 
-# ── Client factory ───────────────────────────────────────────────────────
+# ── Claude Agent SDK helpers ─────────────────────────────────────────────
 
-def get_client(settings: Settings) -> anthropic.Anthropic:
-    """Build an Anthropic client for the configured provider.
-
-    Supported providers (set via ``ANTHROPIC_PROVIDER`` env var):
-
-    - ``"anthropic"`` (default) — direct API. Requires ``ANTHROPIC_API_KEY``.
-    - ``"vertex"`` — Google Cloud Vertex AI.
-      Requires ``ANTHROPIC_VERTEX_PROJECT_ID``, optional ``ANTHROPIC_VERTEX_REGION``.
-    - ``"bedrock"`` — Amazon Bedrock.
-      Optional ``AWS_REGION`` (defaults to ``us-east-1``).
-    """
+def _agent_env(settings: Settings) -> dict[str, str]:
+    """Build Claude Agent SDK environment overrides for the selected provider."""
     provider = settings.anthropic_provider
 
     if provider == "vertex":
-        try:
-            from anthropic import AnthropicVertex
-        except ImportError:
-            raise ImportError(
-                "The 'anthropic[vertex]' extra is required for Vertex AI support. "
-                "Install it with: pip install 'anthropic[vertex]'"
-            )
         if not settings.anthropic_vertex_project_id:
             raise ValueError(
                 "ANTHROPIC_VERTEX_PROJECT_ID environment variable is required "
                 "when using the 'vertex' provider."
             )
         logger.info(
-            "Using Anthropic via Vertex AI (project=%s, region=%s)",
+            "Using Claude Agent SDK via Vertex AI (project=%s, region=%s)",
             settings.anthropic_vertex_project_id,
             settings.anthropic_vertex_region,
         )
-        return AnthropicVertex(
-            project_id=settings.anthropic_vertex_project_id,
-            region=settings.anthropic_vertex_region,
-        )
+        return {
+            "CLAUDE_CODE_USE_VERTEX": "1",
+            "ANTHROPIC_VERTEX_PROJECT_ID": settings.anthropic_vertex_project_id,
+            "CLOUD_ML_REGION": settings.anthropic_vertex_region,
+        }
 
     if provider == "bedrock":
-        try:
-            from anthropic import AnthropicBedrock
-        except ImportError:
-            raise ImportError(
-                "The 'anthropic[bedrock]' extra is required for Bedrock support. "
-                "Install it with: pip install 'anthropic[bedrock]'"
-            )
-        logger.info("Using Anthropic via Amazon Bedrock (region=%s)", settings.aws_region)
-        return AnthropicBedrock(aws_region=settings.aws_region)
+        logger.info("Using Claude Agent SDK via Amazon Bedrock (region=%s)", settings.aws_region)
+        return {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_REGION": settings.aws_region,
+        }
 
     if provider == "anthropic":
-        logger.info("Using Anthropic API directly")
+        logger.info("Using Claude Agent SDK via Anthropic API")
         if not settings.anthropic_api_key:
             raise ValueError(
                 "ANTHROPIC_API_KEY environment variable is required "
                 "when using the 'anthropic' provider."
             )
-        return anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        return {"ANTHROPIC_API_KEY": settings.anthropic_api_key}
 
     raise ValueError(
         f"Unknown ANTHROPIC_PROVIDER '{provider}'. "
@@ -262,85 +261,130 @@ def get_client(settings: Settings) -> anthropic.Anthropic:
     )
 
 
-# ── AQL translation ─────────────────────────────────────────────────────
+# ── Structured output parsing ───────────────────────────────────────────
 
-def _message_text(content: list[object]) -> str:
-    text_blocks = []
-    for block in content:
-        text = getattr(block, "text", None)
-        if isinstance(text, str):
-            text_blocks.append(text)
+async def _query_structured_output(
+    prompt: str,
+    system_prompt: str,
+    schema: dict[str, Any],
+    settings: Settings,
+) -> object:
+    options = ClaudeAgentOptions(
+        model=settings.model_name,
+        system_prompt=system_prompt,
+        allowed_tools=[],
+        max_turns=3,
+        output_format={"type": "json_schema", "schema": schema},
+        env=_agent_env(settings),
+    )
 
-    text = "\n".join(text_blocks).strip()
-    if not text:
-        raise ValueError("Anthropic response did not contain text content.")
-    return text
+    structured_output: object = _MISSING
+
+    async for message in query(prompt=prompt, options=options):
+        if isinstance(message, ResultMessage):
+            if message.subtype == "success" and message.structured_output is not None:
+                structured_output = message.structured_output
+                continue
+
+            details = message.errors or message.result or message.subtype
+            raise ValueError(f"Claude Agent SDK structured output failed: {details}")
+
+    if structured_output is _MISSING:
+        raise ValueError("Claude Agent SDK response did not contain a result message.")
+    return structured_output
 
 
-def _strip_markdown_fence(text: str) -> str:
-    if not text.startswith("```"):
-        return text
+def _run_async(awaitable: Awaitable[object]) -> object:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(awaitable)
 
-    lines = text.splitlines()
-    if lines:
-        lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
+    result: dict[str, object] = {}
+    error: dict[str, BaseException] = {}
+
+    def run_in_thread() -> None:
+        try:
+            result["value"] = asyncio.run(awaitable)
+        except BaseException as exc:
+            error["value"] = exc
+
+    thread = threading.Thread(target=run_in_thread, daemon=True)
+    thread.start()
+    thread.join()
+
+    if "value" in error:
+        raise error["value"]
+    return result.get("value")
+
+
+def _parse_aql_payload(payload: object) -> str:
+    if not isinstance(payload, dict):
+        raise ValueError("Claude Agent SDK response must be a JSON object.")
+
+    expected_keys = set(AQL_QUERY_SCHEMA["required"])
+    actual_keys = set(payload)
+    missing_keys = expected_keys - actual_keys
+    if missing_keys:
+        missing = ", ".join(sorted(missing_keys))
+        raise ValueError(f"Claude Agent SDK response is missing required AQL fields: {missing}.")
+
+    extra_keys = actual_keys - expected_keys
+    if extra_keys:
+        extra = ", ".join(sorted(extra_keys))
+        raise ValueError(f"Claude Agent SDK response contained unexpected AQL fields: {extra}.")
+
+    aql = payload.get("aql")
+    if not isinstance(aql, str) or not aql.strip():
+        raise ValueError("Claude Agent SDK response did not contain a non-empty AQL query.")
+    return aql.strip()
 
 
 def _parse_search_plan_payload(payload: object) -> SearchPlan:
     if not isinstance(payload, dict):
-        raise ValueError("Anthropic response must be a JSON object.")
+        raise ValueError("Claude Agent SDK response must be a JSON object.")
 
     expected_keys = set(SEARCH_PLAN_SCHEMA["required"])
     actual_keys = set(payload)
     missing_keys = expected_keys - actual_keys
     if missing_keys:
         missing = ", ".join(sorted(missing_keys))
-        raise ValueError(f"Anthropic response is missing required search plan fields: {missing}.")
+        raise ValueError(
+            f"Claude Agent SDK response is missing required search plan fields: {missing}."
+        )
 
     extra_keys = actual_keys - expected_keys
     if extra_keys:
         extra = ", ".join(sorted(extra_keys))
-        raise ValueError(f"Anthropic response contained unexpected search plan fields: {extra}.")
+        raise ValueError(
+            f"Claude Agent SDK response contained unexpected search plan fields: {extra}."
+        )
 
     aql = payload.get("aql")
     if not isinstance(aql, str) or not aql.strip():
-        raise ValueError("Anthropic response did not contain a non-empty AQL query.")
+        raise ValueError("Claude Agent SDK response did not contain a non-empty AQL query.")
 
     max_results = payload.get("max_results")
     if max_results is not None:
         if isinstance(max_results, bool) or not isinstance(max_results, int) or max_results <= 0:
-            raise ValueError("Anthropic response max_results must be a positive integer or null.")
+            raise ValueError(
+                "Claude Agent SDK response max_results must be a positive integer or null."
+            )
 
     fetch_all = payload.get("fetch_all", False)
     if not isinstance(fetch_all, bool):
-        raise ValueError("Anthropic response fetch_all must be a boolean.")
+        raise ValueError("Claude Agent SDK response fetch_all must be a boolean.")
 
-    return SearchPlan(aql=aql.strip(), max_results=max_results, fetch_all=fetch_all)
+    result_type = payload.get("result_type")
+    if result_type not in {"objects", "count"}:
+        raise ValueError("Claude Agent SDK response result_type must be 'objects' or 'count'.")
 
-
-def _parse_search_plan(text: str) -> SearchPlan:
-    payload = json.loads(_strip_markdown_fence(text))
-    return _parse_search_plan_payload(payload)
-
-
-def _search_plan_from_tool_use(content: list[object]) -> SearchPlan:
-    for block in content:
-        if (
-            getattr(block, "type", None) == "tool_use"
-            and getattr(block, "name", None) == SEARCH_PLAN_TOOL_NAME
-        ):
-            return _parse_search_plan_payload(getattr(block, "input", None))
-
-    raise ValueError("Anthropic response did not contain a search plan tool call.")
-
-
-def _search_plan_tool_for_provider(settings: Settings) -> dict:
-    if settings.anthropic_provider == "anthropic":
-        return STRICT_SEARCH_PLAN_TOOL
-    return SEARCH_PLAN_TOOL
+    return SearchPlan(
+        aql=aql.strip(),
+        max_results=max_results,
+        fetch_all=fetch_all,
+        result_type=result_type,
+    )
 
 
 def translate_to_aql(
@@ -349,25 +393,19 @@ def translate_to_aql(
     settings: Settings,
 ) -> str:
     """Translate a natural-language question into an AQL query using Claude."""
-    client = get_client(settings)
-
-    message = client.messages.create(
-        model=settings.model_name,
-        max_tokens=512,
-        system=AQL_SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"## Available Schema\n\n{schema_summary}\n\n"
-                    f"---\n\n"
-                    f"Translate this question to AQL:\n{question}"
-                ),
-            }
-        ],
+    payload = _run_async(
+        _query_structured_output(
+            prompt=(
+                f"## Available Schema\n\n{schema_summary}\n\n"
+                f"---\n\n"
+                f"Translate this question to AQL:\n{question}"
+            ),
+            system_prompt=AQL_SYSTEM_PROMPT,
+            schema=AQL_QUERY_SCHEMA,
+            settings=settings,
+        )
     )
-
-    return _strip_markdown_fence(_message_text(message.content))
+    return _parse_aql_payload(payload)
 
 
 def translate_to_search_plan(
@@ -376,29 +414,16 @@ def translate_to_search_plan(
     settings: Settings,
 ) -> SearchPlan:
     """Translate a natural-language question into AQL and result-limit semantics."""
-    client = get_client(settings)
-    search_plan_tool = _search_plan_tool_for_provider(settings)
-
-    message = client.messages.create(
-        model=settings.model_name,
-        max_tokens=768,
-        system=SEARCH_PLAN_SYSTEM_PROMPT,
-        tools=[search_plan_tool],
-        tool_choice={
-            "type": "tool",
-            "name": SEARCH_PLAN_TOOL_NAME,
-            "disable_parallel_tool_use": True,
-        },
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"## Available Schema\n\n{schema_summary}\n\n"
-                    f"---\n\n"
-                    f"Translate this question into a search plan:\n{question}"
-                ),
-            }
-        ],
+    payload = _run_async(
+        _query_structured_output(
+            prompt=(
+                f"## Available Schema\n\n{schema_summary}\n\n"
+                f"---\n\n"
+                f"Translate this question into a search plan:\n{question}"
+            ),
+            system_prompt=SEARCH_PLAN_SYSTEM_PROMPT,
+            schema=SEARCH_PLAN_SCHEMA,
+            settings=settings,
+        )
     )
-
-    return _search_plan_from_tool_use(message.content)
+    return _parse_search_plan_payload(payload)

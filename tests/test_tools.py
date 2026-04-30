@@ -15,6 +15,9 @@ class RecordingClient:
         call = {"path": path, "payload": payload, "params": params}
         self.posts.append(call)
 
+        if path == "/object/aql/totalcount":
+            return {"totalCount": len(self.values)}
+
         start_at = params["startAt"]
         max_results = params["maxResults"]
         values = self.values[start_at:start_at + max_results]
@@ -22,7 +25,7 @@ class RecordingClient:
         return {
             "startAt": start_at,
             "maxResults": max_results,
-            "total": len(self.values),
+            "total": len(values),
             "isLast": str(next_start >= len(self.values)).lower(),
             "values": values,
         }
@@ -50,14 +53,17 @@ class SearchAssetsTests(unittest.TestCase):
         with patch("jsm_asset_mcp.tools.llm.translate_to_search_plan", return_value=plan):
             result = self.toolset.search_assets("Get all MacBook laptops", max_results=2)
 
-        self.assertEqual([call["path"] for call in self.client.posts], ["/object/aql"] * 3)
-        self.assertEqual([call["params"]["startAt"] for call in self.client.posts], [0, 2, 4])
-        self.assertEqual([call["params"]["maxResults"] for call in self.client.posts], [2, 2, 2])
+        page_calls = [call for call in self.client.posts if call["path"] == "/object/aql"]
+        self.assertEqual(self.client.posts[0]["path"], "/object/aql/totalcount")
+        self.assertEqual([call["params"]["startAt"] for call in page_calls], [0, 2, 4])
+        self.assertEqual([call["params"]["maxResults"] for call in page_calls], [2, 2, 2])
         self.assertEqual(result["values"], self.client.values)
         self.assertEqual(result["maxResults"], 5)
+        self.assertEqual(result["total"], 5)
         self.assertEqual(result["_page_size"], 2)
         self.assertEqual(result["_page_count"], 3)
         self.assertEqual(result["_returned_count"], 5)
+        self.assertEqual(result["_total_count"], 5)
         self.assertTrue(result["_pagination_complete"])
         self.assertEqual(result["_result_type"], "objects")
         self.assertEqual(result["_generated_aql"], 'objectType = "Laptop"')
@@ -70,12 +76,15 @@ class SearchAssetsTests(unittest.TestCase):
         with patch("jsm_asset_mcp.tools.llm.translate_to_search_plan", return_value=plan):
             result = self.toolset.search_assets("Show me MacBook laptops", max_results=10)
 
-        self.assertEqual(self.client.posts[0]["path"], "/object/aql")
+        self.assertEqual(self.client.posts[0]["path"], "/object/aql/totalcount")
+        self.assertEqual(self.client.posts[1]["path"], "/object/aql")
         self.assertEqual(
-            self.client.posts[0]["params"],
+            self.client.posts[1]["params"],
             {"startAt": 0, "maxResults": 10, "includeAttributes": "true"},
         )
         self.assertEqual(result["maxResults"], 10)
+        self.assertEqual(result["total"], 5)
+        self.assertEqual(result["_total_count"], 5)
         self.assertEqual(result["_result_type"], "objects")
         self.assertIsNone(result["_llm_max_results"])
         self.assertFalse(result["_llm_fetch_all"])
@@ -86,7 +95,7 @@ class SearchAssetsTests(unittest.TestCase):
         with patch("jsm_asset_mcp.tools.llm.translate_to_search_plan", return_value=plan):
             result = self.toolset.search_assets("Show me three MacBook laptops", max_results=10)
 
-        self.assertEqual(self.client.posts[0]["params"]["maxResults"], 3)
+        self.assertEqual(self.client.posts[1]["params"]["maxResults"], 3)
         self.assertEqual(result["_llm_max_results"], 3)
         self.assertFalse(result["_llm_fetch_all"])
 
@@ -96,12 +105,29 @@ class SearchAssetsTests(unittest.TestCase):
         with patch("jsm_asset_mcp.tools.llm.translate_to_search_plan", return_value=plan):
             result = self.toolset.search_assets("Show MacBook laptops", max_results=3, fetch_all=True)
 
-        self.assertEqual([call["params"]["startAt"] for call in self.client.posts], [0, 3])
+        page_calls = [call for call in self.client.posts if call["path"] == "/object/aql"]
+        self.assertEqual([call["params"]["startAt"] for call in page_calls], [0, 3])
         self.assertEqual(result["values"], self.client.values)
+
+    def test_search_assets_count_question_uses_totalcount_without_fetching_pages(self) -> None:
+        plan = SearchPlan(aql='objectType = "Laptop"', result_type="count")
+
+        with patch("jsm_asset_mcp.tools.llm.translate_to_search_plan", return_value=plan):
+            result = self.toolset.search_assets("How many MacBook laptops do we have?")
+
+        self.assertEqual([call["path"] for call in self.client.posts], ["/object/aql/totalcount"])
+        self.assertEqual(result["totalCount"], 5)
+        self.assertEqual(result["total"], 5)
+        self.assertEqual(result["values"], [])
+        self.assertEqual(result["_returned_count"], 0)
+        self.assertEqual(result["_total_count"], 5)
+        self.assertEqual(result["_result_type"], "count")
 
     def test_execute_aql_fetch_all_paginates_until_last_page(self) -> None:
         result = self.toolset.execute_aql('objectType = "Laptop"', max_results=2, fetch_all=True)
 
-        self.assertEqual([call["params"]["startAt"] for call in self.client.posts], [0, 2, 4])
+        page_calls = [call for call in self.client.posts if call["path"] == "/object/aql"]
+        self.assertEqual(self.client.posts[0]["path"], "/object/aql/totalcount")
+        self.assertEqual([call["params"]["startAt"] for call in page_calls], [0, 2, 4])
         self.assertEqual(result["values"], self.client.values)
         self.assertEqual(result["_returned_count"], 5)

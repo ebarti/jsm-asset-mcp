@@ -33,10 +33,10 @@ class Settings:
     jira_workspace_id: str = ""
     jira_cloud_id: str = ""
 
-    # Anthropic provider
+    # Claude provider
     anthropic_provider: str = "anthropic"
 
-    # Anthropic direct
+    # Anthropic API direct
     anthropic_api_key: str = ""
 
     # Vertex AI

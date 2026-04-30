@@ -191,15 +191,26 @@ class Toolset:
         }
         return self.deps.client.post("/object/aql", payload={"qlQuery": query}, params=params)
 
+    def _fetch_aql_total_count(self, query: str) -> int:
+        result = self.deps.client.post("/object/aql/totalcount", payload={"qlQuery": query})
+        total_count = result.get("totalCount")
+        if not isinstance(total_count, int):
+            raise ValueError("Assets total-count response did not contain an integer totalCount.")
+        return total_count
+
     def _fetch_all_aql(
         self,
         query: str,
         start_at: int,
         max_results: int,
         include_attributes: bool,
+        total_count: int | None = None,
     ) -> dict:
         pages = []
         next_start = start_at
+        expected_total = total_count
+        if expected_total is None:
+            expected_total = self._fetch_aql_total_count(query)
 
         while True:
             page = self._fetch_aql_page(query, next_start, max_results, include_attributes)
@@ -213,13 +224,17 @@ class Toolset:
 
             page_start = int(page.get("startAt", next_start))
             next_start = page_start + len(values)
-            total = page.get("total")
-            if isinstance(total, int) and next_start >= total:
+            if next_start >= expected_total:
                 break
 
-        return self._merge_aql_pages(pages, max_results)
+        return self._merge_aql_pages(pages, max_results, expected_total)
 
-    def _merge_aql_pages(self, pages: list[dict], page_size: int) -> dict:
+    def _merge_aql_pages(
+        self,
+        pages: list[dict],
+        page_size: int,
+        total_count: int | None = None,
+    ) -> dict:
         if not pages:
             return {
                 "startAt": 0,
@@ -238,10 +253,9 @@ class Toolset:
         for page in pages:
             values.extend(page.get("values", []))
 
-        total = pages[-1].get("total", result.get("total"))
+        total = total_count if total_count is not None else len(values)
         complete = _is_last_page(pages[-1])
-        if isinstance(total, int):
-            complete = complete or len(values) >= total
+        complete = complete or len(values) >= total
 
         result["startAt"] = pages[0].get("startAt", 0)
         result["maxResults"] = len(values)
@@ -251,6 +265,7 @@ class Toolset:
         result["_page_size"] = page_size
         result["_page_count"] = len(pages)
         result["_returned_count"] = len(values)
+        result["_total_count"] = total
         result["_pagination_complete"] = complete
         return result
 
@@ -259,9 +274,9 @@ class Toolset:
         AQL query by first inspecting the schema to understand available object types and
         attributes, then constructing the appropriate query.
 
-        Claude decides whether the user's question asks for an explicit result limit
-        or all matching objects. If it does not, max_results is used as the default
-        page size and single-page result limit.
+        Claude decides whether the user's question asks for objects or an exact
+        count, plus whether it asks for an explicit result limit or all matching
+        objects. Count requests use the Assets total-count endpoint.
 
         Examples:
             - "Find all laptops assigned to John"
@@ -278,17 +293,40 @@ class Toolset:
         """
         plan = self._translate_question(question)
         page_size = plan.max_results or max_results
+        total_count = self._fetch_aql_total_count(plan.aql)
 
-        if fetch_all or plan.fetch_all:
-            result = self._fetch_all_aql(plan.aql, 0, page_size, include_attributes=True)
+        if plan.result_type == "count":
+            result = {
+                "totalCount": total_count,
+                "total": total_count,
+                "startAt": 0,
+                "maxResults": 0,
+                "isLast": True,
+                "values": [],
+                "_page_size": page_size,
+                "_page_count": 0,
+                "_returned_count": 0,
+                "_total_count": total_count,
+                "_pagination_complete": True,
+            }
+        elif fetch_all or plan.fetch_all:
+            result = self._fetch_all_aql(
+                plan.aql,
+                0,
+                page_size,
+                include_attributes=True,
+                total_count=total_count,
+            )
         else:
             result = self._fetch_aql_page(plan.aql, 0, page_size, include_attributes=True)
+            result["total"] = total_count
+            result["_total_count"] = total_count
 
         result["_generated_aql"] = plan.aql
         result["_original_question"] = question
         result["_llm_max_results"] = plan.max_results
         result["_llm_fetch_all"] = plan.fetch_all
-        result["_result_type"] = "objects"
+        result["_result_type"] = plan.result_type
         return result
 
     # ── Related data ─────────────────────────────────────────────────────

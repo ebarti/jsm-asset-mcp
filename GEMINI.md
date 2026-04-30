@@ -12,7 +12,7 @@ The codebase is a Python package (`jsm_asset_mcp/`) with the following modules:
 | `client.py` | `AssetsClient` — thin httpx wrapper with auth and base URL |
 | `cache.py` | Generic `TTLCache` — domain-agnostic |
 | `schema.py` | `SchemaService` — schema introspection and summary builder |
-| `llm.py` | Anthropic client factory + natural-language → AQL translation |
+| `llm.py` | Claude Agent SDK structured-output natural-language → AQL translation |
 | `tools.py` | All MCP tool definitions (thin orchestration) |
 | `server.py` | `create_server()` factory — wires dependencies, returns FastMCP |
 
@@ -20,7 +20,7 @@ Entrypoint: `main.py` calls `create_server().run()`.
 
 ## Core Capabilities
 - **Query Assets**: Use `execute_aql` to query objects based on Asset Query Language (AQL).
-- **Search Assets**: Use `search_assets` for natural-language object searches. Claude decides the AQL query and result limit; if the user asks for all matching objects, the tool paginates through all AQL result pages.
+- **Search Assets**: Use `search_assets` for natural-language object searches. Claude decides the AQL query, result type, and result limit; count questions use the Assets total-count endpoint, and all-object requests paginate through all AQL result pages.
 - **Retrieve Assets**: Use `get_object` to fetch specific details about an asset by ID.
 - **Update Assets**: Use `update_object` to modify an existing asset's attributes.
 
