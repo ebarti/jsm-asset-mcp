@@ -3,35 +3,91 @@ name: Release Extension
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: '20'
+          python-version: "3.13"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
-      - name: Build extension
-        run: npm run build
+      - name: Install Python dependencies
+        run: uv sync --all-extras --frozen
 
-      - name: Create release assets
+      - name: Run tests
+        run: uv run --all-extras python -m unittest discover -s tests
+
+      - name: Build extension archive
         run: |
-          npm run package -- --platform=darwin --arch=arm64
-          npm run package -- --platform=linux --arch=x64
-          npm run package -- --platform=win32 --arch=x64
+          mkdir -p dist
+          python - <<'PY'
+          import os
+          import tarfile
+          from pathlib import Path
+
+          version = os.environ["GITHUB_REF_NAME"]
+          artifact = Path("dist") / f"jsm-asset-mcp-{version}.tar.gz"
+          files = [
+              Path("gemini-extension.json"),
+              Path("GEMINI.md"),
+              Path("README.md"),
+              Path("main.py"),
+              Path("pyproject.toml"),
+              Path("uv.lock"),
+          ]
+          files.extend(sorted(Path("jsm_asset_mcp").rglob("*.py")))
+
+          with tarfile.open(artifact, "w:gz") as tar:
+              for path in files:
+                  tar.add(path, arcname=(Path("jsm-asset-mcp") / path).as_posix())
+
+          print(f"Created {artifact}")
+          PY
+
+      - name: Verify extension archive
+        run: |
+          python - <<'PY'
+          import tarfile
+          from pathlib import Path
+
+          artifacts = list(Path("dist").glob("*.tar.gz"))
+          if len(artifacts) != 1:
+              raise SystemExit(f"Expected one archive, found {artifacts}")
+
+          with tarfile.open(artifacts[0], "r:gz") as tar:
+              names = set(tar.getnames())
+
+          required = {
+              "jsm-asset-mcp/gemini-extension.json",
+              "jsm-asset-mcp/GEMINI.md",
+              "jsm-asset-mcp/README.md",
+              "jsm-asset-mcp/main.py",
+              "jsm-asset-mcp/pyproject.toml",
+              "jsm-asset-mcp/uv.lock",
+              "jsm-asset-mcp/jsm_asset_mcp/server.py",
+          }
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(f"Archive missing required files: {missing}")
+          PY
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release/darwin.arm64.my-tool.tar.gz
-            release/linux.arm64.my-tool.tar.gz
-            release/win32.arm64.my-tool.zip
+          files: dist/*.tar.gz
+          fail_on_unmatched_files: true
