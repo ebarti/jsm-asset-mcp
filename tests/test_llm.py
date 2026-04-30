@@ -7,6 +7,9 @@ from jsm_asset_mcp.llm import (
     AQL_SYSTEM_PROMPT,
     SEARCH_PLAN_SCHEMA,
     SEARCH_PLAN_SYSTEM_PROMPT,
+    SEARCH_PLAN_TOOL,
+    SEARCH_PLAN_TOOL_NAME,
+    STRICT_SEARCH_PLAN_TOOL,
     SearchPlan,
     get_client,
     translate_to_aql,
@@ -125,12 +128,18 @@ class TranslateToAqlTests(unittest.TestCase):
 
         self.assertEqual(aql, 'Name LIKE "prod"')
 
-    def test_translate_to_search_plan_parses_json_response(self) -> None:
+    def test_translate_to_search_plan_uses_strict_tool_schema(self) -> None:
         settings = Settings(anthropic_provider="anthropic", anthropic_api_key="test-key")
         messages = FakeMessages(
             [
                 SimpleNamespace(
-                    text='{"aql": "objectType = \\"Laptop\\"", "max_results": 10, "fetch_all": false}'
+                    type="tool_use",
+                    name=SEARCH_PLAN_TOOL_NAME,
+                    input={
+                        "aql": 'objectType = "Laptop"',
+                        "max_results": 10,
+                        "fetch_all": False,
+                    },
                 )
             ]
         )
@@ -140,18 +149,60 @@ class TranslateToAqlTests(unittest.TestCase):
             plan = translate_to_search_plan("show ten laptops", "schema", settings)
 
         self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"', max_results=10))
+        self.assertNotIn("output_config", messages.calls[0])
+        self.assertEqual(messages.calls[0]["tools"], [STRICT_SEARCH_PLAN_TOOL])
         self.assertEqual(
-            messages.calls[0]["output_config"],
-            {"format": {"type": "json_schema", "schema": SEARCH_PLAN_SCHEMA}},
+            messages.calls[0]["tool_choice"],
+            {
+                "type": "tool",
+                "name": SEARCH_PLAN_TOOL_NAME,
+                "disable_parallel_tool_use": True,
+            },
         )
+        self.assertTrue(messages.calls[0]["tools"][0]["strict"])
+        self.assertEqual(messages.calls[0]["tools"][0]["input_schema"], SEARCH_PLAN_SCHEMA)
 
-    def test_translate_to_search_plan_parses_fetch_all_response(self) -> None:
+    def test_translate_to_search_plan_omits_strict_for_vertex(self) -> None:
+        settings = Settings(
+            anthropic_provider="vertex",
+            anthropic_vertex_project_id="test-project",
+        )
+        messages = FakeMessages(
+            [
+                SimpleNamespace(
+                    type="tool_use",
+                    name=SEARCH_PLAN_TOOL_NAME,
+                    input={
+                        "aql": 'objectType = "Laptop"',
+                        "max_results": None,
+                        "fetch_all": False,
+                    },
+                )
+            ]
+        )
+        client = SimpleNamespace(messages=messages)
+
+        with patch("jsm_asset_mcp.llm.get_client", return_value=client):
+            plan = translate_to_search_plan("show laptops", "schema", settings)
+
+        self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"'))
+        self.assertEqual(messages.calls[0]["tools"], [SEARCH_PLAN_TOOL])
+        self.assertNotIn("strict", messages.calls[0]["tools"][0])
+        self.assertNotIn("output_config", messages.calls[0])
+
+    def test_translate_to_search_plan_parses_fetch_all_tool_response(self) -> None:
         settings = Settings(anthropic_provider="anthropic", anthropic_api_key="test-key")
         client = SimpleNamespace(
             messages=FakeMessages(
                 [
                     SimpleNamespace(
-                        text='```json\n{"aql": "objectType = \\"Laptop\\"", "max_results": null, "fetch_all": true}\n```'
+                        type="tool_use",
+                        name=SEARCH_PLAN_TOOL_NAME,
+                        input={
+                            "aql": 'objectType = "Laptop"',
+                            "max_results": None,
+                            "fetch_all": True,
+                        },
                     )
                 ]
             )
@@ -161,3 +212,26 @@ class TranslateToAqlTests(unittest.TestCase):
             plan = translate_to_search_plan("show all laptops", "schema", settings)
 
         self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"', fetch_all=True))
+
+    def test_translate_to_search_plan_rejects_extra_tool_fields(self) -> None:
+        settings = Settings(anthropic_provider="anthropic", anthropic_api_key="test-key")
+        client = SimpleNamespace(
+            messages=FakeMessages(
+                [
+                    SimpleNamespace(
+                        type="tool_use",
+                        name=SEARCH_PLAN_TOOL_NAME,
+                        input={
+                            "aql": 'objectType = "Laptop"',
+                            "max_results": None,
+                            "fetch_all": False,
+                            "unexpected": "value",
+                        },
+                    )
+                ]
+            )
+        )
+
+        with patch("jsm_asset_mcp.llm.get_client", return_value=client):
+            with self.assertRaisesRegex(ValueError, "unexpected search plan fields"):
+                translate_to_search_plan("show laptops", "schema", settings)

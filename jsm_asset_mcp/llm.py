@@ -177,6 +177,17 @@ SEARCH_PLAN_SCHEMA = {
     "additionalProperties": False,
 }
 
+SEARCH_PLAN_TOOL_NAME = "build_search_plan"
+SEARCH_PLAN_TOOL = {
+    "name": SEARCH_PLAN_TOOL_NAME,
+    "description": (
+        "Return the AQL query and result-limit behavior for a natural-language "
+        "Jira Service Management Assets search."
+    ),
+    "input_schema": SEARCH_PLAN_SCHEMA,
+}
+STRICT_SEARCH_PLAN_TOOL = {**SEARCH_PLAN_TOOL, "strict": True}
+
 
 @dataclass(frozen=True)
 class SearchPlan:
@@ -278,10 +289,21 @@ def _strip_markdown_fence(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _parse_search_plan(text: str) -> SearchPlan:
-    payload = json.loads(_strip_markdown_fence(text))
+def _parse_search_plan_payload(payload: object) -> SearchPlan:
     if not isinstance(payload, dict):
         raise ValueError("Anthropic response must be a JSON object.")
+
+    expected_keys = set(SEARCH_PLAN_SCHEMA["required"])
+    actual_keys = set(payload)
+    missing_keys = expected_keys - actual_keys
+    if missing_keys:
+        missing = ", ".join(sorted(missing_keys))
+        raise ValueError(f"Anthropic response is missing required search plan fields: {missing}.")
+
+    extra_keys = actual_keys - expected_keys
+    if extra_keys:
+        extra = ", ".join(sorted(extra_keys))
+        raise ValueError(f"Anthropic response contained unexpected search plan fields: {extra}.")
 
     aql = payload.get("aql")
     if not isinstance(aql, str) or not aql.strip():
@@ -289,7 +311,7 @@ def _parse_search_plan(text: str) -> SearchPlan:
 
     max_results = payload.get("max_results")
     if max_results is not None:
-        if not isinstance(max_results, int) or max_results <= 0:
+        if isinstance(max_results, bool) or not isinstance(max_results, int) or max_results <= 0:
             raise ValueError("Anthropic response max_results must be a positive integer or null.")
 
     fetch_all = payload.get("fetch_all", False)
@@ -297,6 +319,28 @@ def _parse_search_plan(text: str) -> SearchPlan:
         raise ValueError("Anthropic response fetch_all must be a boolean.")
 
     return SearchPlan(aql=aql.strip(), max_results=max_results, fetch_all=fetch_all)
+
+
+def _parse_search_plan(text: str) -> SearchPlan:
+    payload = json.loads(_strip_markdown_fence(text))
+    return _parse_search_plan_payload(payload)
+
+
+def _search_plan_from_tool_use(content: list[object]) -> SearchPlan:
+    for block in content:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == SEARCH_PLAN_TOOL_NAME
+        ):
+            return _parse_search_plan_payload(getattr(block, "input", None))
+
+    raise ValueError("Anthropic response did not contain a search plan tool call.")
+
+
+def _search_plan_tool_for_provider(settings: Settings) -> dict:
+    if settings.anthropic_provider == "anthropic":
+        return STRICT_SEARCH_PLAN_TOOL
+    return SEARCH_PLAN_TOOL
 
 
 def translate_to_aql(
@@ -333,16 +377,17 @@ def translate_to_search_plan(
 ) -> SearchPlan:
     """Translate a natural-language question into AQL and result-limit semantics."""
     client = get_client(settings)
+    search_plan_tool = _search_plan_tool_for_provider(settings)
 
     message = client.messages.create(
         model=settings.model_name,
         max_tokens=768,
         system=SEARCH_PLAN_SYSTEM_PROMPT,
-        output_config={
-            "format": {
-                "type": "json_schema",
-                "schema": SEARCH_PLAN_SCHEMA,
-            }
+        tools=[search_plan_tool],
+        tool_choice={
+            "type": "tool",
+            "name": SEARCH_PLAN_TOOL_NAME,
+            "disable_parallel_tool_use": True,
         },
         messages=[
             {
@@ -356,4 +401,4 @@ def translate_to_search_plan(
         ],
     )
 
-    return _parse_search_plan(_message_text(message.content))
+    return _search_plan_from_tool_use(message.content)
