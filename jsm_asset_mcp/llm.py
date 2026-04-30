@@ -7,6 +7,7 @@ structured-output parsing for Claude Agent SDK calls.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from collections.abc import Awaitable
@@ -206,6 +207,37 @@ SEARCH_PLAN_SCHEMA = {
 }
 
 
+def _to_gemini_schema(schema: dict) -> dict:
+    """Convert JSON Schema to Gemini's response_schema dialect."""
+    result: dict = {}
+    for key, value in schema.items():
+        if key == "additionalProperties":
+            continue
+
+        if key == "anyOf" and isinstance(value, list):
+            non_null = [v for v in value if not (isinstance(v, dict) and v.get("type") == "null")]
+            has_null = any(isinstance(v, dict) and v.get("type") == "null" for v in value)
+            if has_null and len(non_null) == 1 and isinstance(non_null[0], dict):
+                result.update(_to_gemini_schema(non_null[0]))
+                result["nullable"] = True
+                continue
+            result[key] = [_to_gemini_schema(v) for v in value]
+            continue
+
+        if key == "properties" and isinstance(value, dict):
+            result[key] = {k: _to_gemini_schema(v) for k, v in value.items()}
+            continue
+
+        if isinstance(value, dict):
+            result[key] = _to_gemini_schema(value)
+        elif isinstance(value, list):
+            result[key] = [_to_gemini_schema(v) if isinstance(v, dict) else v for v in value]
+        else:
+            result[key] = value
+
+    return result
+
+
 @dataclass(frozen=True)
 class SearchPlan:
     """AQL plus LLM-selected result limit semantics."""
@@ -220,13 +252,13 @@ class SearchPlan:
 
 def _agent_env(settings: Settings) -> dict[str, str]:
     """Build Claude Agent SDK environment overrides for the selected provider."""
-    provider = settings.anthropic_provider
+    provider = settings.active_llm_provider
 
-    if provider == "vertex":
+    if provider == "anthropic-vertex":
         if not settings.anthropic_vertex_project_id:
             raise ValueError(
                 "ANTHROPIC_VERTEX_PROJECT_ID environment variable is required "
-                "when using the 'vertex' provider."
+                "when using the 'anthropic-vertex' provider."
             )
         logger.info(
             "Using Claude Agent SDK via Vertex AI (project=%s, region=%s)",
@@ -239,7 +271,7 @@ def _agent_env(settings: Settings) -> dict[str, str]:
             "CLOUD_ML_REGION": settings.anthropic_vertex_region,
         }
 
-    if provider == "bedrock":
+    if provider == "anthropic-bedrock":
         logger.info("Using Claude Agent SDK via Amazon Bedrock (region=%s)", settings.aws_region)
         return {
             "CLAUDE_CODE_USE_BEDROCK": "1",
@@ -256,19 +288,88 @@ def _agent_env(settings: Settings) -> dict[str, str]:
         return {"ANTHROPIC_API_KEY": settings.anthropic_api_key}
 
     raise ValueError(
-        f"Unknown ANTHROPIC_PROVIDER '{provider}'. "
-        f"Supported values: 'anthropic', 'vertex', 'bedrock'."
+        f"Unknown LLM_PROVIDER '{provider}'. "
+        "Supported values: 'anthropic', 'anthropic-vertex', 'anthropic-bedrock', 'gemini'."
     )
 
 
 # ── Structured output parsing ───────────────────────────────────────────
+
+def _strip_markdown_fence(text: str) -> str:
+    if not text.startswith("```"):
+        return text
+
+    lines = text.splitlines()
+    if lines:
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _gemini_response_text(response: object) -> str:
+    text = getattr(response, "text", None)
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Gemini response did not contain text content.")
+    return text.strip()
+
+
+def _build_gemini_client(settings: Settings) -> Any:
+    if not settings.gemini_api_key:
+        raise ValueError(
+            "GEMINI_API_KEY environment variable is required "
+            "when using the 'gemini' provider."
+        )
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise ImportError(
+            "The 'gemini' extra is required for Gemini support. "
+            "Install it with: pip install '.[gemini]'"
+        ) from exc
+    logger.info("Using Google Gemini via AI Studio")
+    return genai.Client(api_key=settings.gemini_api_key)
+
+
+def _query_gemini_structured_output(
+    prompt: str,
+    system_prompt: str,
+    schema: dict[str, Any],
+    settings: Settings,
+    max_tokens: int,
+) -> object:
+    from google.genai import types as genai_types
+
+    client = _build_gemini_client(settings)
+    response = client.models.generate_content(
+        model=settings.model_name,
+        contents=[prompt],
+        config=genai_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            max_output_tokens=max_tokens,
+            response_mime_type="application/json",
+            response_schema=_to_gemini_schema(schema),
+        ),
+    )
+    return json.loads(_strip_markdown_fence(_gemini_response_text(response)))
+
 
 async def _query_structured_output(
     prompt: str,
     system_prompt: str,
     schema: dict[str, Any],
     settings: Settings,
+    max_tokens: int,
 ) -> object:
+    if settings.active_llm_provider == "gemini":
+        return _query_gemini_structured_output(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            schema=schema,
+            settings=settings,
+            max_tokens=max_tokens,
+        )
+
     options = ClaudeAgentOptions(
         model=settings.model_name,
         system_prompt=system_prompt,
@@ -403,6 +504,7 @@ def translate_to_aql(
             system_prompt=AQL_SYSTEM_PROMPT,
             schema=AQL_QUERY_SCHEMA,
             settings=settings,
+            max_tokens=512,
         )
     )
     return _parse_aql_payload(payload)
@@ -424,6 +526,7 @@ def translate_to_search_plan(
             system_prompt=SEARCH_PLAN_SYSTEM_PROMPT,
             schema=SEARCH_PLAN_SCHEMA,
             settings=settings,
+            max_tokens=768,
         )
     )
     return _parse_search_plan_payload(payload)

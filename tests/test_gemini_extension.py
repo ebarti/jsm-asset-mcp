@@ -30,3 +30,16 @@ class GeminiExtensionManifestTests(unittest.TestCase):
         setting_env_vars = {setting["envVar"] for setting in manifest["settings"]}
 
         self.assertIn("JIRA_CLOUD_ID", setting_env_vars)
+
+    def test_manifest_exposes_llm_provider_and_gemini_key(self) -> None:
+        manifest_path = Path(__file__).resolve().parents[1] / "gemini-extension.json"
+        manifest = json.loads(manifest_path.read_text())
+
+        server_env = manifest["mcpServers"]["jsm-asset-mcp"]["env"]
+        setting_env_vars = {setting["envVar"] for setting in manifest["settings"]}
+
+        self.assertIn("LLM_PROVIDER", server_env)
+        self.assertIn("GEMINI_API_KEY", server_env)
+        self.assertNotIn("ANTHROPIC_PROVIDER", server_env)
+        self.assertIn("LLM_PROVIDER", setting_env_vars)
+        self.assertIn("GEMINI_API_KEY", setting_env_vars)

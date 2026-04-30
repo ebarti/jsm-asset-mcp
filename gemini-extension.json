@@ -18,11 +18,12 @@
         "JIRA_API_TOKEN": "${JIRA_API_TOKEN}",
         "JIRA_WORKSPACE_ID": "${JIRA_WORKSPACE_ID}",
         "JIRA_CLOUD_ID": "${JIRA_CLOUD_ID}",
-        "ANTHROPIC_PROVIDER": "${ANTHROPIC_PROVIDER}",
+        "LLM_PROVIDER": "${LLM_PROVIDER}",
         "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
         "ANTHROPIC_VERTEX_PROJECT_ID": "${ANTHROPIC_VERTEX_PROJECT_ID}",
         "ANTHROPIC_VERTEX_REGION": "${ANTHROPIC_VERTEX_REGION}",
-        "AWS_REGION": "${AWS_REGION}"
+        "AWS_REGION": "${AWS_REGION}",
+        "GEMINI_API_KEY": "${GEMINI_API_KEY}"
       }
     }
   },
@@ -54,9 +55,9 @@
       "envVar": "JIRA_CLOUD_ID"
     },
     {
-      "name": "Anthropic Provider",
-      "description": "Authentication provider: 'anthropic' (default), 'vertex' (Google Vertex AI), or 'bedrock' (Amazon Bedrock)",
-      "envVar": "ANTHROPIC_PROVIDER"
+      "name": "LLM Provider",
+      "description": "LLM provider: 'anthropic' (default, direct API), 'anthropic-vertex' (Google Vertex AI), 'anthropic-bedrock' (Amazon Bedrock), or 'gemini' (Google AI Studio)",
+      "envVar": "LLM_PROVIDER"
     },
     {
       "name": "Anthropic API Key",
@@ -66,18 +67,24 @@
     },
     {
       "name": "Vertex Project ID",
-      "description": "(Required for provider=vertex) Your GCP project ID",
+      "description": "(Required for provider=anthropic-vertex) Your GCP project ID",
       "envVar": "ANTHROPIC_VERTEX_PROJECT_ID"
     },
     {
       "name": "Vertex Region",
-      "description": "(Optional for provider=vertex) GCP region, defaults to global",
+      "description": "(Optional for provider=anthropic-vertex) GCP region, defaults to global",
       "envVar": "ANTHROPIC_VERTEX_REGION"
     },
     {
       "name": "AWS Region",
-      "description": "(Optional for provider=bedrock) AWS region, defaults to us-east-1",
+      "description": "(Optional for provider=anthropic-bedrock) AWS region, defaults to us-east-1",
       "envVar": "AWS_REGION"
+    },
+    {
+      "name": "Gemini API Key",
+      "description": "(Required for provider=gemini) Your Google AI Studio API key (https://aistudio.google.com/apikey)",
+      "envVar": "GEMINI_API_KEY",
+      "sensitive": true
     }
   ]
 }

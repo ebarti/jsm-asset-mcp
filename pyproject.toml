@@ -10,3 +10,6 @@ dependencies = [
     "mcp>=1.26.0",
     "python-dotenv>=1.2.1",
 ]
+
+[project.optional-dependencies]
+gemini = ["google-genai>=1.0"]

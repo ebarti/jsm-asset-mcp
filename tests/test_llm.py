@@ -1,6 +1,7 @@
 import unittest
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from claude_agent_sdk import ResultMessage
 
@@ -110,7 +111,7 @@ class AqlSystemPromptTests(unittest.TestCase):
 
 class TranslateToAqlTests(unittest.TestCase):
     def test_translate_to_aql_uses_agent_sdk_structured_output(self) -> None:
-        settings = Settings(anthropic_provider="anthropic", anthropic_api_key="test-key")
+        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
         recorder = QueryRecorder({"aql": 'objectType = "Laptop"'})
 
         with patch("jsm_asset_mcp.llm.query", recorder):
@@ -128,7 +129,7 @@ class TranslateToAqlTests(unittest.TestCase):
         self.assertEqual(call["options"].env["ANTHROPIC_API_KEY"], "test-key")
 
     def test_translate_to_search_plan_uses_agent_sdk_output_format(self) -> None:
-        settings = Settings(anthropic_provider="anthropic", anthropic_api_key="test-key")
+        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
         recorder = QueryRecorder(
             {
                 "aql": 'objectType = "Laptop"',
@@ -154,7 +155,7 @@ class TranslateToAqlTests(unittest.TestCase):
 
     def test_translate_to_search_plan_sets_vertex_environment(self) -> None:
         settings = Settings(
-            anthropic_provider="vertex",
+            llm_provider="anthropic-vertex",
             anthropic_vertex_project_id="test-project",
             anthropic_vertex_region="global",
         )
@@ -181,7 +182,7 @@ class TranslateToAqlTests(unittest.TestCase):
         )
 
     def test_translate_to_search_plan_parses_fetch_all_response(self) -> None:
-        settings = Settings(anthropic_provider="anthropic", anthropic_api_key="test-key")
+        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
         recorder = QueryRecorder(
             {
                 "aql": 'objectType = "Laptop"',
@@ -197,7 +198,7 @@ class TranslateToAqlTests(unittest.TestCase):
         self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"', fetch_all=True))
 
     def test_translate_to_search_plan_parses_count_response(self) -> None:
-        settings = Settings(anthropic_provider="anthropic", anthropic_api_key="test-key")
+        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
         recorder = QueryRecorder(
             {
                 "aql": 'objectType = "Laptop"',
@@ -213,7 +214,7 @@ class TranslateToAqlTests(unittest.TestCase):
         self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"', result_type="count"))
 
     def test_translate_to_search_plan_rejects_extra_fields(self) -> None:
-        settings = Settings(anthropic_provider="anthropic", anthropic_api_key="test-key")
+        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
         recorder = QueryRecorder(
             {
                 "aql": 'objectType = "Laptop"',
@@ -229,7 +230,164 @@ class TranslateToAqlTests(unittest.TestCase):
                 translate_to_search_plan("show laptops", "schema", settings)
 
     def test_translate_to_search_plan_requires_direct_api_key(self) -> None:
-        settings = Settings(anthropic_provider="anthropic")
+        settings = Settings(llm_provider="anthropic")
 
         with self.assertRaisesRegex(ValueError, "ANTHROPIC_API_KEY"):
             translate_to_search_plan("show laptops", "schema", settings)
+
+
+class SchemaTranslationTests(unittest.TestCase):
+    def test_rewrites_anyof_with_null_to_nullable_flag(self) -> None:
+        from jsm_asset_mcp.llm import _to_gemini_schema
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}],
+                    "description": "n results",
+                },
+            },
+        }
+
+        result = _to_gemini_schema(schema)
+
+        self.assertEqual(
+            result["properties"]["max_results"],
+            {"type": "integer", "minimum": 1, "nullable": True, "description": "n results"},
+        )
+
+    def test_drops_additional_properties_for_gemini(self) -> None:
+        from jsm_asset_mcp.llm import _to_gemini_schema
+
+        result = _to_gemini_schema(
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "additionalProperties": False,
+            }
+        )
+
+        self.assertNotIn("additionalProperties", result)
+        self.assertEqual(result["properties"]["name"], {"type": "string"})
+
+    def test_search_plan_schema_is_translatable_to_gemini(self) -> None:
+        from jsm_asset_mcp.llm import _to_gemini_schema
+
+        result = _to_gemini_schema(SEARCH_PLAN_SCHEMA)
+
+        self.assertEqual(result["type"], "object")
+        self.assertEqual(result["required"], ["aql", "max_results", "fetch_all", "result_type"])
+        self.assertTrue(result["properties"]["max_results"]["nullable"])
+        self.assertNotIn("additionalProperties", result)
+
+
+class FakeGeminiModels:
+    def __init__(self, response_text: str) -> None:
+        self.response_text = response_text
+        self.calls: list[dict[str, Any]] = []
+
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(text=self.response_text)
+
+
+class FakeGeminiClient:
+    def __init__(self, response_text: str) -> None:
+        self.models = FakeGeminiModels(response_text)
+
+
+class GeminiBackendTests(unittest.TestCase):
+    def setUp(self) -> None:
+        config_class = type(
+            "GenerateContentConfig",
+            (),
+            {"__init__": lambda self, **kw: self.__dict__.update(kw)},
+        )
+        genai_types = SimpleNamespace(GenerateContentConfig=config_class)
+        genai_module = SimpleNamespace(types=genai_types)
+        self._patcher = patch.dict(
+            "sys.modules",
+            {
+                "google": SimpleNamespace(genai=genai_module),
+                "google.genai": genai_module,
+                "google.genai.types": genai_types,
+            },
+        )
+        self._patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+
+    def test_translate_to_aql_uses_gemini_json_mode(self) -> None:
+        client = FakeGeminiClient(response_text='{"aql": "objectType = \\"Laptop\\""}')
+        settings = Settings(llm_provider="gemini", gemini_api_key="test-key")
+
+        with patch("jsm_asset_mcp.llm._build_gemini_client", return_value=client):
+            aql = translate_to_aql("find laptops", "schema", settings)
+
+        self.assertEqual(aql, 'objectType = "Laptop"')
+        call = client.models.calls[0]
+        self.assertEqual(call["model"], "gemini-2.5-pro")
+        self.assertEqual(call["contents"][0].splitlines()[-1], "find laptops")
+        config = call["config"]
+        self.assertEqual(config.system_instruction, AQL_SYSTEM_PROMPT)
+        self.assertEqual(config.max_output_tokens, 512)
+        self.assertEqual(config.response_mime_type, "application/json")
+        self.assertEqual(config.response_schema["required"], ["aql"])
+
+    def test_translate_to_search_plan_uses_gemini_response_schema(self) -> None:
+        client = FakeGeminiClient(
+            response_text=(
+                '{"aql": "objectType = \\"Laptop\\"", '
+                '"max_results": null, "fetch_all": false, "result_type": "count"}'
+            )
+        )
+        settings = Settings(llm_provider="gemini", gemini_api_key="test-key")
+
+        with patch("jsm_asset_mcp.llm._build_gemini_client", return_value=client):
+            plan = translate_to_search_plan("how many laptops", "schema", settings)
+
+        self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"', result_type="count"))
+        config = client.models.calls[0]["config"]
+        self.assertEqual(config.max_output_tokens, 768)
+        self.assertEqual(config.response_mime_type, "application/json")
+        self.assertTrue(config.response_schema["properties"]["max_results"]["nullable"])
+        self.assertNotIn("additionalProperties", config.response_schema)
+
+    def test_translate_to_search_plan_strips_gemini_markdown_fence(self) -> None:
+        client = FakeGeminiClient(
+            response_text=(
+                '```json\n{"aql": "objectType = \\"Laptop\\"", '
+                '"max_results": 3, "fetch_all": false, "result_type": "objects"}\n```'
+            )
+        )
+        settings = Settings(llm_provider="gemini", gemini_api_key="test-key")
+
+        with patch("jsm_asset_mcp.llm._build_gemini_client", return_value=client):
+            plan = translate_to_search_plan("show three laptops", "schema", settings)
+
+        self.assertEqual(
+            plan,
+            SearchPlan(aql='objectType = "Laptop"', max_results=3, result_type="objects"),
+        )
+
+
+class BuildGeminiClientTests(unittest.TestCase):
+    def test_requires_gemini_api_key(self) -> None:
+        from jsm_asset_mcp.llm import _build_gemini_client
+
+        settings = Settings(llm_provider="gemini")
+        with self.assertRaisesRegex(ValueError, "GEMINI_API_KEY"):
+            _build_gemini_client(settings)
+
+    def test_builds_genai_client_with_api_key(self) -> None:
+        from jsm_asset_mcp.llm import _build_gemini_client
+
+        settings = Settings(llm_provider="gemini", gemini_api_key="test-key")
+        fake_genai = SimpleNamespace(Client=Mock(return_value=SimpleNamespace(models=None)))
+
+        with patch.dict("sys.modules", {"google": SimpleNamespace(genai=fake_genai), "google.genai": fake_genai}):
+            _build_gemini_client(settings)
+
+        fake_genai.Client.assert_called_once_with(api_key="test-key")

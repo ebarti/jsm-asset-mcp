@@ -33,8 +33,8 @@ class Settings:
     jira_workspace_id: str = ""
     jira_cloud_id: str = ""
 
-    # Claude provider
-    anthropic_provider: str = "anthropic"
+    # LLM provider selection
+    llm_provider: str = ""
 
     # Anthropic API direct
     anthropic_api_key: str = ""
@@ -46,12 +46,16 @@ class Settings:
     # Bedrock
     aws_region: str = "us-east-1"
 
+    # Gemini (Google AI Studio)
+    gemini_api_key: str = ""
+
     # Model names per provider (not user-configurable, but here for clarity)
     _model_names: dict[str, str] = field(
         default_factory=lambda: {
             "anthropic": "claude-opus-4-7",
-            "vertex": "claude-opus-4-7",
-            "bedrock": "anthropic.claude-opus-4-7",
+            "anthropic-vertex": "claude-opus-4-7",
+            "anthropic-bedrock": "anthropic.claude-opus-4-7",
+            "gemini": "gemini-2.5-pro",
         },
         repr=False,
     )
@@ -68,11 +72,12 @@ class Settings:
             jira_api_token=os.environ.get("JIRA_API_TOKEN", ""),
             jira_workspace_id=os.environ.get("JIRA_WORKSPACE_ID", ""),
             jira_cloud_id=os.environ.get("JIRA_CLOUD_ID", ""),
-            anthropic_provider=os.environ.get("ANTHROPIC_PROVIDER", "anthropic").lower(),
+            llm_provider=os.environ.get("LLM_PROVIDER", "anthropic").lower(),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             anthropic_vertex_project_id=os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", ""),
             anthropic_vertex_region=os.environ.get("ANTHROPIC_VERTEX_REGION", "global"),
             aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+            gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
         )
 
     # ── Derived helpers ──────────────────────────────────────────────────
@@ -85,9 +90,14 @@ class Settings:
         return (self.jira_email, self.jira_api_token)
 
     @property
+    def active_llm_provider(self) -> str:
+        """Return the normalized active LLM provider name."""
+        return (self.llm_provider or "anthropic").lower()
+
+    @property
     def model_name(self) -> str:
         """Return the model identifier for the active provider."""
-        return self._model_names.get(self.anthropic_provider, self._model_names["anthropic"])
+        return self._model_names.get(self.active_llm_provider, self._model_names["anthropic"])
 
     def resolve_cloud_id(self) -> str:
         """Return ``cloud_id``, auto-discovering from ``jira_domain`` if needed."""

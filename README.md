@@ -8,10 +8,11 @@ An MCP (Model Context Protocol) server for interacting with the Jira Cloud Asset
 - [`uv`](https://docs.astral.sh/uv/) (recommended) or `pip`
 - Jira Cloud account with JSM Premium or Enterprise (Assets feature)
 - Jira API token ([create one here](https://id.atlassian.com/manage-profile/security/api-tokens))
-- **One** of the following for Claude Agent SDK-powered natural language search:
+- **One** of the following for AI-powered natural language search:
   - Anthropic API key (direct API access)
   - Google Cloud project with Vertex AI enabled
   - AWS account with Bedrock access
+  - Google AI Studio API key (Gemini)
 
 ## Setup
 
@@ -37,16 +38,16 @@ JIRA_API_TOKEN=your_jira_api_token
 # JIRA_WORKSPACE_ID=your_workspace_id
 ```
 
-### 3. Configure Claude provider
+### 3. Configure LLM provider
 
-The `search_assets` tool uses the Claude Agent SDK to translate natural language into AQL queries with structured output. You can authenticate via the Anthropic API directly, or through Google Vertex AI or Amazon Bedrock.
+The `search_assets` tool uses a structured-output LLM call to translate natural language into AQL queries. You can use Claude via the Claude Agent SDK (direct Anthropic API, Vertex AI, or Bedrock) or Gemini via Google AI Studio.
 
-Set `ANTHROPIC_PROVIDER` to choose your authentication method:
+Set `LLM_PROVIDER` to choose your provider:
 
 #### Option A: Anthropic API (default)
 
 ```env
-ANTHROPIC_PROVIDER=anthropic
+LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=your_anthropic_api_key
 ```
 
@@ -58,7 +59,7 @@ gcloud auth application-default login
 ```
 
 ```env
-ANTHROPIC_PROVIDER=vertex
+LLM_PROVIDER=anthropic-vertex
 ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id
 ANTHROPIC_VERTEX_REGION=global   # optional, defaults to global
 ```
@@ -68,8 +69,23 @@ ANTHROPIC_VERTEX_REGION=global   # optional, defaults to global
 Ensure AWS credentials are configured (via `~/.aws/credentials`, env vars, or IAM role).
 
 ```env
-ANTHROPIC_PROVIDER=bedrock
+LLM_PROVIDER=anthropic-bedrock
 AWS_REGION=us-east-1   # optional, defaults to us-east-1
+```
+
+#### Option D: Google AI Studio (Gemini)
+
+Install the Gemini extra:
+```bash
+uv pip install '.[gemini]'
+# or: pip install '.[gemini]'
+```
+
+Get an AI Studio API key from https://aistudio.google.com/apikey — no GCP project needed.
+
+```env
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_api_key
 ```
 
 **Finding your Cloud ID:** Visit `https://your-domain.atlassian.net/_edge/tenant_info` in your browser — the `cloudId` field is what you need.
@@ -92,7 +108,7 @@ Add this to your Claude Desktop config file (`~/Library/Application Support/Clau
         "JIRA_DOMAIN": "your-domain.atlassian.net",
         "JIRA_EMAIL": "your-email@example.com",
         "JIRA_API_TOKEN": "your_jira_api_token",
-        "ANTHROPIC_PROVIDER": "anthropic",
+        "LLM_PROVIDER": "anthropic",
         "ANTHROPIC_API_KEY": "your_anthropic_api_key"
       }
     }
@@ -114,7 +130,7 @@ Add the MCP server to your project settings (`.claude/settings.json`):
         "JIRA_DOMAIN": "your-domain.atlassian.net",
         "JIRA_EMAIL": "your-email@example.com",
         "JIRA_API_TOKEN": "your_jira_api_token",
-        "ANTHROPIC_PROVIDER": "anthropic",
+        "LLM_PROVIDER": "anthropic",
         "ANTHROPIC_API_KEY": "your_anthropic_api_key"
       }
     }
@@ -172,10 +188,10 @@ See the included `gemini-extension.json` for Gemini-specific configuration.
 
 ## Natural Language Search
 
-The `search_assets` tool lets you query assets without knowing AQL syntax. It uses AI (Claude Opus 4.7) to translate natural language into AQL:
+The `search_assets` tool lets you query assets without knowing AQL syntax. It uses the configured LLM to translate natural language into AQL:
 
 1. Inspects and caches the full schema (object types, attributes, and their data types)
-2. Sends the schema context and your question to Claude Opus 4.7 for intelligent AQL generation
+2. Sends the schema context and your question to the configured LLM for AQL generation
 3. Executes the generated AQL query
 4. Returns results along with the generated AQL for transparency
 

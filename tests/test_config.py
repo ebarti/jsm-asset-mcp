@@ -6,18 +6,37 @@ from jsm_asset_mcp.config import Settings
 
 class SettingsDiscoveryTests(unittest.TestCase):
     def test_default_model_names_use_claude_opus_4_7_only(self) -> None:
-        self.assertEqual(Settings(anthropic_provider="anthropic").model_name, "claude-opus-4-7")
-        self.assertEqual(Settings(anthropic_provider="vertex").model_name, "claude-opus-4-7")
+        self.assertEqual(Settings(llm_provider="anthropic").model_name, "claude-opus-4-7")
+        self.assertEqual(Settings(llm_provider="anthropic-vertex").model_name, "claude-opus-4-7")
         self.assertEqual(
-            Settings(anthropic_provider="bedrock").model_name,
+            Settings(llm_provider="anthropic-bedrock").model_name,
             "anthropic.claude-opus-4-7",
         )
 
+    def test_gemini_provider_model_defaults_to_gemini_2_5_pro(self) -> None:
+        self.assertEqual(Settings(llm_provider="gemini").model_name, "gemini-2.5-pro")
+
     def test_unknown_provider_model_falls_back_to_claude_opus_4_7(self) -> None:
-        self.assertEqual(Settings(anthropic_provider="unknown").model_name, "claude-opus-4-7")
+        self.assertEqual(Settings(llm_provider="unknown").model_name, "claude-opus-4-7")
 
     def test_vertex_region_defaults_to_global(self) -> None:
         self.assertEqual(Settings().anthropic_vertex_region, "global")
+
+    def test_from_env_reads_llm_provider_and_gemini_api_key(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "LLM_PROVIDER": "GEMINI",
+                "GEMINI_API_KEY": "test-gemini-key",
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertEqual(settings.llm_provider, "gemini")
+        self.assertEqual(settings.active_llm_provider, "gemini")
+        self.assertEqual(settings.gemini_api_key, "test-gemini-key")
+
 
     def test_resolve_cloud_id_uses_timeout(self) -> None:
         response = Mock()
