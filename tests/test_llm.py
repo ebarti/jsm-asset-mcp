@@ -4,6 +4,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 from claude_agent_sdk import ResultMessage
+from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 
 from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.llm import (
@@ -154,6 +155,26 @@ class TranslateToAqlTests(unittest.TestCase):
             {"type": "json_schema", "schema": SEARCH_PLAN_SCHEMA},
         )
         self.assertNotIn("output_config", call)
+
+    def test_translator_cli_disables_inherited_local_capabilities(self) -> None:
+        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
+        recorder = QueryRecorder({"aql": 'objectType = "Laptop"'})
+
+        with patch("jsm_asset_mcp.llm.query", recorder):
+            translate_to_aql("find laptops", "untrusted schema text", settings)
+
+        options = recorder.calls[0]["options"]
+        self.assertEqual(options.mcp_servers, {})
+        self.assertEqual(options.setting_sources, [])
+        self.assertEqual(options.skills, [])
+        options.cli_path = "claude"  # Build the installed SDK command without starting a provider call.
+        command = SubprocessCLITransport("probe", options)._build_command()
+        self.assertEqual(command[command.index("--tools") + 1], "")
+        self.assertIn("--strict-mcp-config", command)
+        self.assertIn("--setting-sources=", command)
+        self.assertIn("--bare", command)
+        self.assertNotIn("--mcp-config", command)
+        self.assertNotIn("--plugin-dir", command)
 
     def test_translate_to_search_plan_sets_vertex_environment(self) -> None:
         settings = Settings(

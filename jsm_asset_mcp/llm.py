@@ -370,11 +370,16 @@ async def _query_structured_output(
             max_tokens=max_tokens,
         )
 
+    # The CLI can load MCP servers and hooks from local settings even with no built-in tools.
     options = ClaudeAgentOptions(
         model=settings.model_name,
         system_prompt=system_prompt,
         tools=[],
         allowed_tools=[],
+        mcp_servers={},
+        setting_sources=[],
+        skills=[],
+        extra_args={"strict-mcp-config": None, "bare": None},
         max_turns=3,
         output_format={"type": "json_schema", "schema": schema},
         env=_agent_env(settings),
