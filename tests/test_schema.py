@@ -24,8 +24,8 @@ class SchemaPaginationTests(unittest.TestCase):
     def test_shared_service_and_public_tool_return_all_26_schemas(self) -> None:
         schemas = [{"id": str(i), "name": f"Schema {i}"} for i in range(26)]
         client = SchemaClient([
-            {"startAt": 0, "maxResults": 25, "total": 26, "isLast": False, "values": schemas[:25]},
-            {"startAt": 25, "maxResults": 25, "total": 26, "isLast": True, "values": schemas[25:]},
+            {"startAt": 0, "maxResults": 25, "total": 26, "isLast": "false", "values": schemas[:25]},
+            {"startAt": 25, "maxResults": 25, "total": 26, "isLast": "true", "values": schemas[25:]},
         ])
         service = SchemaService(client, TTLCache())
         toolset = Toolset(Dependencies(Settings(), client, service))
