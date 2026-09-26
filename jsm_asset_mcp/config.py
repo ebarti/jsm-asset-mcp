@@ -123,17 +123,23 @@ class Settings:
         if self.jira_workspace_id:
             return self.jira_workspace_id
 
-        if not self.jira_domain:
-            raise ValueError("JIRA_DOMAIN environment variable is required if JIRA_WORKSPACE_ID is not provided.")
-
-        url = f"https://{self.jira_domain}/rest/servicedeskapi/assets/workspace"
-        response = httpx.get(
-            url,
-            auth=self.auth,
-            headers={"Accept": "application/json"},
-            timeout=_DISCOVERY_TIMEOUT,
-        )
-        response.raise_for_status()
+        cloud_id = self.resolve_cloud_id()
+        gateway_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/servicedeskapi/assets/workspace"
+        request_options = {
+            "auth": self.auth,
+            "headers": {"Accept": "application/json"},
+            "timeout": _DISCOVERY_TIMEOUT,
+        }
+        try:
+            response = httpx.get(gateway_url, **request_options)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Classic tokens may still require the site-hosted JSM route.
+            if exc.response.status_code not in {401, 403, 404} or not self.jira_domain:
+                raise
+            legacy_url = f"https://{self.jira_domain}/rest/servicedeskapi/assets/workspace"
+            response = httpx.get(legacy_url, **request_options)
+            response.raise_for_status()
 
         data = response.json()
         workspace_id = (

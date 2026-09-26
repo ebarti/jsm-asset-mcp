@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import Mock, patch
 
+import httpx
+
 from jsm_asset_mcp.config import Settings
 
 
@@ -52,13 +54,13 @@ class SettingsDiscoveryTests(unittest.TestCase):
             timeout=30,
         )
 
-    def test_resolve_workspace_id_uses_timeout(self) -> None:
+    def test_resolve_workspace_id_uses_cloud_gateway(self) -> None:
         response = Mock()
         response.json.return_value = {"workspaceId": "workspace-123"}
 
         with patch("jsm_asset_mcp.config.httpx.get", return_value=response) as http_get:
             settings = Settings(
-                jira_domain="example.atlassian.net",
+                jira_cloud_id="cloud-123",
                 jira_email="user@example.com",
                 jira_api_token="token",
             )
@@ -66,8 +68,37 @@ class SettingsDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(workspace_id, "workspace-123")
         http_get.assert_called_once_with(
-            "https://example.atlassian.net/rest/servicedeskapi/assets/workspace",
+            "https://api.atlassian.com/ex/jira/cloud-123/rest/servicedeskapi/assets/workspace",
             auth=("user@example.com", "token"),
             headers={"Accept": "application/json"},
             timeout=30,
+        )
+
+    def test_workspace_id_bypasses_discovery_when_explicit(self) -> None:
+        with patch("jsm_asset_mcp.config.httpx.get") as http_get:
+            settings = Settings(jira_workspace_id="workspace-123")
+            self.assertEqual(settings.resolve_workspace_id(), "workspace-123")
+        http_get.assert_not_called()
+
+    def test_legacy_site_route_remains_available_for_unscoped_tokens(self) -> None:
+        request = httpx.Request(
+            "GET", "https://api.atlassian.com/ex/jira/cloud-123/rest/servicedeskapi/assets/workspace"
+        )
+        gateway_response = httpx.Response(401, request=request)
+        legacy_response = Mock()
+        legacy_response.json.return_value = {"values": [{"workspaceId": "workspace-123"}]}
+
+        with patch("jsm_asset_mcp.config.httpx.get", side_effect=[gateway_response, legacy_response]) as http_get:
+            settings = Settings(
+                jira_domain="example.atlassian.net",
+                jira_cloud_id="cloud-123",
+                jira_email="user@example.com",
+                jira_api_token="token",
+            )
+            self.assertEqual(settings.resolve_workspace_id(), "workspace-123")
+
+        self.assertEqual(http_get.call_count, 2)
+        self.assertEqual(
+            http_get.call_args_list[1].args[0],
+            "https://example.atlassian.net/rest/servicedeskapi/assets/workspace",
         )

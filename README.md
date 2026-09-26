@@ -90,7 +90,7 @@ GEMINI_API_KEY=your_gemini_api_key
 
 **Finding your Cloud ID:** Visit `https://your-domain.atlassian.net/_edge/tenant_info` in your browser — the `cloudId` field is what you need.
 
-**Finding your Workspace ID:** The server discovers this automatically, but you can also find it via the JSM Assets API: `GET https://your-domain.atlassian.net/rest/servicedeskapi/assets/workspace`
+**Finding your Workspace ID:** The server discovers this automatically through `https://api.atlassian.com/ex/jira/{cloudId}/rest/servicedeskapi/assets/workspace`, which supports scoped API tokens. If that request returns 401, 403, or 404, it also tries the site-hosted JSM route for classic tokens. Set `JIRA_WORKSPACE_ID` to use a known ID without a discovery request.
 
 ## Configuring with Claude
 
@@ -118,7 +118,7 @@ Add this to your Claude Desktop config file (`~/Library/Application Support/Clau
 
 ### Claude Code (CLI)
 
-Add the MCP server to your project settings (`.claude/settings.json`):
+Add the MCP server to `.mcp.json` in your project root:
 
 ```json
 {
@@ -195,7 +195,7 @@ The `search_assets` tool lets you query assets without knowing AQL syntax. It us
 3. Executes the generated AQL query
 4. Returns results along with the generated AQL for transparency
 
-For natural-language searches, Claude returns a structured search plan with the AQL query, result type, and intended result limit. If the user asks for a count or total, `search_assets` uses `/object/aql/totalcount` for the exact count. If the user asks for all matching objects, it paginates through each `/object/aql` page until all matches are returned. If the user asks for a specific number, that number is used as the result limit. If no limit is specified, the tool's `max_results` parameter is used as the default.
+For natural-language searches, the configured provider returns a structured search plan with the AQL query, result type, and intended result limit. If the user asks for a count or total, `search_assets` uses `/object/aql/totalcount` for the exact count. If the user asks for all matching objects, it paginates through each `/object/aql` page until all matches are returned. If the user asks for a specific number, that number is used as the result limit. If no limit is specified, the tool's `max_results` parameter is used as the default.
 
 Because the translation is AI-powered, it handles complex queries, synonyms, implied filters, and ambiguous phrasing far better than keyword matching. It understands your schema and can reason about which object types and attributes to query.
 
@@ -218,7 +218,7 @@ For direct AQL queries via `execute_aql`, here are common patterns:
 objectType = "Laptop"                           # All objects of a type
 Name = "my-server-01"                           # Exact match
 Name LIKE "server"                              # Contains
-Name STARTS WITH "prod-"                        # Prefix
+Name STARTSWITH "prod-"                          # Prefix
 objectType = "Server" AND Status = "Active"     # Multiple conditions
 objectType = "Server" ORDER BY Name ASC         # Sorting
 ```

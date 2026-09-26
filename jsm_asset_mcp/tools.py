@@ -6,6 +6,7 @@ server instances isolated by carrying their dependencies explicitly.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from jsm_asset_mcp import llm
@@ -137,7 +138,7 @@ class Toolset:
 
     def list_object_schemas(self) -> dict:
         """List all object schemas available in the workspace."""
-        return self.deps.client.get("/objectschema/list")
+        return self.deps.schema.fetch_all_schemas_response()
 
     def get_object_schema(self, schema_id: str) -> dict:
         """Get details of a specific object schema.
@@ -250,8 +251,18 @@ class Toolset:
 
         result = dict(pages[0])
         values = []
+        attributes = []
+        seen_attributes = set()
         for page in pages:
             values.extend(page.get("values", []))
+            for attribute in page.get("objectTypeAttributes", []):
+                identity = attribute.get("globalId") or (
+                    (attribute.get("workspaceId"), attribute.get("id"))
+                    if attribute.get("id") is not None else json.dumps(attribute, sort_keys=True)
+                )
+                if identity not in seen_attributes:
+                    seen_attributes.add(identity)
+                    attributes.append(attribute)
 
         total = total_count if total_count is not None else len(values)
         complete = _is_last_page(pages[-1])
@@ -262,6 +273,20 @@ class Toolset:
         result["total"] = total
         result["isLast"] = complete
         result["values"] = values
+        if any("objectTypeAttributes" in page for page in pages):
+            result["objectTypeAttributes"] = attributes
+        if any("last" in page for page in pages):
+            result["last"] = complete
+        if "pageNumber" in result:
+            result["pageNumber"] = 1
+        if "pageSize" in result:
+            result["pageSize"] = len(values)
+        if "pageObjectSize" in result:
+            result["pageObjectSize"] = len(values)
+        if "startIndex" in result:
+            result["toIndex"] = result["startIndex"] + len(values) - 1
+        if "totalFilterCount" in result:
+            result["totalFilterCount"] = total
         result["_page_size"] = page_size
         result["_page_count"] = len(pages)
         result["_returned_count"] = len(values)
