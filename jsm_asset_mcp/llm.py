@@ -373,6 +373,7 @@ async def _query_structured_output(
     options = ClaudeAgentOptions(
         model=settings.model_name,
         system_prompt=system_prompt,
+        tools=[],
         allowed_tools=[],
         max_turns=3,
         output_format={"type": "json_schema", "schema": schema},

@@ -121,6 +121,7 @@ class TranslateToAqlTests(unittest.TestCase):
         call = recorder.calls[0]
         self.assertIn("Translate this question to AQL", call["prompt"])
         self.assertEqual(call["options"].model, "claude-opus-4-7")
+        self.assertEqual(call["options"].tools, [])
         self.assertEqual(call["options"].allowed_tools, [])
         self.assertEqual(
             call["options"].output_format,
@@ -147,6 +148,7 @@ class TranslateToAqlTests(unittest.TestCase):
             SearchPlan(aql='objectType = "Laptop"', max_results=10, result_type="objects"),
         )
         call = recorder.calls[0]
+        self.assertEqual(call["options"].tools, [])
         self.assertEqual(
             call["options"].output_format,
             {"type": "json_schema", "schema": SEARCH_PLAN_SCHEMA},
