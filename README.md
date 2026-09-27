@@ -183,7 +183,7 @@ Then set the environment variables in your `.env` file or export them in your sh
 
 See the included `gemini-extension.json` for extension configuration. Its provider
 setting offers Claude, Codex, and Antigravity routes, so the extension installs
-all provider extras when it starts.
+all provider extras from the shipped lockfile when it starts.
 
 ## Features / Available Tools
 
