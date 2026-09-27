@@ -88,6 +88,7 @@ class ClaudeAdapterTests(unittest.TestCase):
                 self.assertEqual(plan, SearchPlan(aql=AQL))
                 self.assertIn("untrusted schema", prompt)
                 self.assertEqual(options.model, settings.model_name)
+                self.assertIsNone(options.model)
                 self.assertIn(auth_key, options.env)
                 self.assertEqual(options.tools, [])
                 self.assertEqual(options.allowed_tools, [])
@@ -106,19 +107,28 @@ class ClaudeAdapterTests(unittest.TestCase):
                 self.assertIn("--bare", command)
                 self.assertNotIn("--mcp-config", command)
                 self.assertNotIn("--plugin-dir", command)
+                self.assertNotIn("--model", command)
 
-    def test_custom_model_and_aql_result(self):
-        calls = []
+    def test_custom_model_and_aql_result_for_all_claude_aliases(self):
+        cases = [
+            Settings(llm_provider="anthropic", anthropic_api_key="test-key", llm_model="claude-custom"),
+            Settings(llm_provider="anthropic-vertex", anthropic_vertex_project_id="test-project", llm_model="claude-custom"),
+            Settings(llm_provider="anthropic-bedrock", llm_model="bedrock-custom"),
+        ]
+        for settings in cases:
+            with self.subTest(provider=settings.active_llm_provider):
+                calls = []
 
-        async def query(*, prompt, options):
-            calls.append(options)
-            yield _claude_message({"aql": AQL})
+                async def query(*, prompt, options):
+                    calls.append(options)
+                    yield _claude_message({"aql": AQL})
 
-        with patch("claude_agent_sdk.query", query):
-            self.assertEqual(translate_to_aql("find laptops", "schema", Settings(
-                llm_provider="anthropic", anthropic_api_key="test-key", llm_model="claude-custom"
-            )), AQL)
-        self.assertEqual(calls[0].model, "claude-custom")
+                with patch("claude_agent_sdk.query", query):
+                    self.assertEqual(translate_to_aql("find laptops", "schema", settings), AQL)
+                self.assertEqual(calls[0].model, settings.llm_model)
+                calls[0].cli_path = "claude"
+                command = SubprocessCLITransport("probe", calls[0])._build_command()
+                self.assertEqual(command[command.index("--model") + 1], settings.llm_model)
 
     def test_count_and_fetch_all_plans_preserve_search_semantics(self):
         settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
@@ -194,6 +204,7 @@ class AntigravityAdapterTests(unittest.TestCase):
                 self.assertEqual(config.triggers, [])
                 self.assertEqual(config.skills_paths, [])
                 self.assertEqual(config.api_key, "test-key")
+                self.assertIsNone(config.model)
                 self.assertEqual(exits, [True])
                 self.assertTrue(json.loads(config.response_schema)["properties"]["max_results"]["nullable"])
 

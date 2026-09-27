@@ -7,21 +7,15 @@ from jsm_asset_mcp.config import Settings
 
 
 class SettingsDiscoveryTests(unittest.TestCase):
-    def test_default_model_names_use_claude_opus_4_7_only(self) -> None:
-        self.assertEqual(Settings(llm_provider="anthropic").model_name, "claude-opus-4-7")
-        self.assertEqual(Settings(llm_provider="anthropic-vertex").model_name, "claude-opus-4-7")
-        self.assertEqual(
-            Settings(llm_provider="anthropic-bedrock").model_name,
-            "anthropic.claude-opus-4-7",
-        )
-
-    def test_gemini_provider_model_defaults_to_gemini_2_5_pro(self) -> None:
-        self.assertEqual(Settings(llm_provider="gemini").model_name, "gemini-2.5-pro")
-
-    def test_native_runtime_defaults_and_custom_model(self) -> None:
-        self.assertIsNone(Settings(llm_provider="codex").model_name)
-        self.assertIsNone(Settings(llm_provider="antigravity").model_name)
-        self.assertEqual(Settings(llm_provider="codex", llm_model="gpt-custom").model_name, "gpt-custom")
+    def test_native_runtime_defaults_and_custom_model_for_every_alias(self) -> None:
+        for provider in ("anthropic", "anthropic-vertex", "anthropic-bedrock",
+                         "gemini", "codex", "antigravity"):
+            with self.subTest(provider=provider):
+                self.assertIsNone(Settings(llm_provider=provider).model_name)
+                self.assertEqual(
+                    Settings(llm_provider=provider, llm_model="native-custom").model_name,
+                    "native-custom",
+                )
 
     def test_unknown_provider_fails_instead_of_using_claude(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown LLM_PROVIDER"):

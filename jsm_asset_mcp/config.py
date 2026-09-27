@@ -50,14 +50,13 @@ class Settings:
     # Gemini (Google AI Studio)
     gemini_api_key: str = ""
 
-    # Native defaults for configured providers. Codex and Antigravity use their
-    # runtime defaults unless LLM_MODEL selects a specific model.
+    # Let each runtime choose its native model unless LLM_MODEL overrides it.
     _model_names: dict[str, str | None] = field(
         default_factory=lambda: {
-            "anthropic": "claude-opus-4-7",
-            "anthropic-vertex": "claude-opus-4-7",
-            "anthropic-bedrock": "anthropic.claude-opus-4-7",
-            "gemini": "gemini-2.5-pro",
+            "anthropic": None,
+            "anthropic-vertex": None,
+            "anthropic-bedrock": None,
+            "gemini": None,
             "codex": None,
             "antigravity": None,
         },

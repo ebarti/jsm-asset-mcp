@@ -48,7 +48,7 @@ JIRA_API_TOKEN=your_jira_api_token
 
 ### 3. Configure LLM provider
 
-The `search_assets` tool uses [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) 0.5.2 to translate natural language into AQL. The supported runtimes are Claude, Codex, and Antigravity. Existing `anthropic`, `anthropic-vertex`, and `anthropic-bedrock` settings use Claude; `gemini` uses Antigravity with a Google AI Studio key. Set `LLM_MODEL` to override the selected runtime's model. Codex and Antigravity otherwise use their native defaults.
+The `search_assets` tool uses [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) 0.5.2 to translate natural language into AQL. The supported runtimes are Claude, Codex, and Antigravity. Existing `anthropic`, `anthropic-vertex`, and `anthropic-bedrock` settings use Claude; `gemini` uses Antigravity with a Google AI Studio key. Every provider uses its runtime's native model by default. Set `LLM_MODEL` to override it, including for Bedrock.
 
 Set `LLM_PROVIDER` to choose your provider:
 
