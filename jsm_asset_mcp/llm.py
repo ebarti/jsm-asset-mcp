@@ -23,7 +23,6 @@ from agent_runtime_kit import AgentKit, AgentTask, PermissionProfile
 from jsm_asset_mcp.config import Settings
 
 logger = logging.getLogger(__name__)
-_MISSING = object()
 
 # ── AQL System Prompt ────────────────────────────────────────────────────
 
@@ -252,7 +251,7 @@ class SearchPlan:
     result_type: str = "objects"
 
 
-# ── Claude Agent SDK helpers ─────────────────────────────────────────────
+# ── Claude provider environment ─────────────────────────────────────────
 
 def _agent_env(settings: Settings) -> dict[str, str]:
     """Build Claude Agent SDK environment overrides for the selected provider."""
@@ -293,7 +292,7 @@ def _agent_env(settings: Settings) -> dict[str, str]:
 
     raise ValueError(
         f"Unknown LLM_PROVIDER '{provider}'. "
-        "Supported values: 'anthropic', 'anthropic-vertex', 'anthropic-bedrock', 'gemini'."
+        "Supported values: 'anthropic', 'anthropic-vertex', 'anthropic-bedrock'."
     )
 
 
@@ -418,6 +417,8 @@ def _antigravity_runtime(settings: Settings, data_dir: Path) -> Any:
 
 
 def _codex_runtime(settings: Settings, data_dir: Path) -> Any:
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise ValueError("OPENAI_API_KEY is required for isolated Codex translation.")
     try:
         from openai_codex import ApprovalMode, AsyncCodex, CodexConfig, Sandbox
         from openai_codex.api import AsyncThread
@@ -432,6 +433,18 @@ def _codex_runtime(settings: Settings, data_dir: Path) -> Any:
         raise RuntimeError("Codex tool isolation is verified only with openai-codex 0.154.0.")
 
     class IsolatedCodex(AsyncCodex):
+        async def close(self) -> None:
+            # The pinned SDK closes stdin and reaps the process but leaves the
+            # stdout/stderr pipe handles open. This wrapper owns that process.
+            process = self._client._sync._proc
+            try:
+                await super().close()
+            finally:
+                if process is not None:
+                    for stream in (process.stdout, process.stderr):
+                        if stream is not None and not stream.closed:
+                            stream.close()
+
         async def thread_start(
             self,
             *,
@@ -474,8 +487,20 @@ def _codex_runtime(settings: Settings, data_dir: Path) -> Any:
         env=isolated_env,
         config_overrides=(
             "features.plugins=false",
+            "features.plugin_hooks=false",
+            "features.apps=false",
             "features.shell_tool=false",
             "features.view_image=false",
+            "features.multi_agent=false",
+            "features.multi_agent_v2=false",
+            "agents.enabled=false",
+            "features.skill_search=false",
+            "features.skip_host_skill_discovery=true",
+            "skills.bundled.enabled=false",
+            "skills.include_instructions=false",
+            "tools.experimental_request_user_input.enabled=false",
+            "orchestrator.skills.enabled=false",
+            "orchestrator.mcp.enabled=false",
             "web_search=disabled",
             "mcp_servers={}",
         ),
@@ -557,29 +582,29 @@ def _run_async(awaitable: Awaitable[object]) -> object:
 
 def _parse_aql_payload(payload: object) -> str:
     if not isinstance(payload, dict):
-        raise ValueError("Claude Agent SDK response must be a JSON object.")
+        raise ValueError("AQL translator response must be a JSON object.")
 
     expected_keys = set(AQL_QUERY_SCHEMA["required"])
     actual_keys = set(payload)
     missing_keys = expected_keys - actual_keys
     if missing_keys:
         missing = ", ".join(sorted(missing_keys))
-        raise ValueError(f"Claude Agent SDK response is missing required AQL fields: {missing}.")
+        raise ValueError(f"AQL translator response is missing required AQL fields: {missing}.")
 
     extra_keys = actual_keys - expected_keys
     if extra_keys:
         extra = ", ".join(sorted(extra_keys))
-        raise ValueError(f"Claude Agent SDK response contained unexpected AQL fields: {extra}.")
+        raise ValueError(f"AQL translator response contained unexpected AQL fields: {extra}.")
 
     aql = payload.get("aql")
     if not isinstance(aql, str) or not aql.strip():
-        raise ValueError("Claude Agent SDK response did not contain a non-empty AQL query.")
+        raise ValueError("AQL translator response did not contain a non-empty AQL query.")
     return aql.strip()
 
 
 def _parse_search_plan_payload(payload: object) -> SearchPlan:
     if not isinstance(payload, dict):
-        raise ValueError("Claude Agent SDK response must be a JSON object.")
+        raise ValueError("AQL translator response must be a JSON object.")
 
     expected_keys = set(SEARCH_PLAN_SCHEMA["required"])
     actual_keys = set(payload)
@@ -587,34 +612,38 @@ def _parse_search_plan_payload(payload: object) -> SearchPlan:
     if missing_keys:
         missing = ", ".join(sorted(missing_keys))
         raise ValueError(
-            f"Claude Agent SDK response is missing required search plan fields: {missing}."
+            f"AQL translator response is missing required search plan fields: {missing}."
         )
 
     extra_keys = actual_keys - expected_keys
     if extra_keys:
         extra = ", ".join(sorted(extra_keys))
         raise ValueError(
-            f"Claude Agent SDK response contained unexpected search plan fields: {extra}."
+            f"AQL translator response contained unexpected search plan fields: {extra}."
         )
 
     aql = payload.get("aql")
     if not isinstance(aql, str) or not aql.strip():
-        raise ValueError("Claude Agent SDK response did not contain a non-empty AQL query.")
+        raise ValueError("AQL translator response did not contain a non-empty AQL query.")
 
     max_results = payload.get("max_results")
     if max_results is not None:
         if isinstance(max_results, bool) or not isinstance(max_results, int) or max_results <= 0:
             raise ValueError(
-                "Claude Agent SDK response max_results must be a positive integer or null."
+                "AQL translator response max_results must be a positive integer or null."
             )
 
     fetch_all = payload.get("fetch_all", False)
     if not isinstance(fetch_all, bool):
-        raise ValueError("Claude Agent SDK response fetch_all must be a boolean.")
+        raise ValueError("AQL translator response fetch_all must be a boolean.")
 
     result_type = payload.get("result_type")
     if result_type not in {"objects", "count"}:
-        raise ValueError("Claude Agent SDK response result_type must be 'objects' or 'count'.")
+        raise ValueError("AQL translator response result_type must be 'objects' or 'count'.")
+    if result_type == "count" and (fetch_all or max_results is not None):
+        raise ValueError("AQL translator count plan cannot request objects or a result limit.")
+    if fetch_all and max_results is not None:
+        raise ValueError("AQL translator fetch_all plan cannot also set a result limit.")
 
     return SearchPlan(
         aql=aql.strip(),
@@ -629,7 +658,7 @@ def translate_to_aql(
     schema_summary: str,
     settings: Settings,
 ) -> str:
-    """Translate a natural-language question into an AQL query using Claude."""
+    """Translate a natural-language question into an AQL query."""
     payload = _run_async(
         _query_structured_output(
             prompt=(

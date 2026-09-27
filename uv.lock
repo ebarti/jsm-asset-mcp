@@ -541,7 +541,7 @@ requires-dist = [
     { name = "agent-runtime-kit", extras = ["claude"], marker = "extra == 'claude'", specifier = "==0.5.2" },
     { name = "agent-runtime-kit", extras = ["codex"], marker = "extra == 'codex'", specifier = "==0.5.2" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", specifier = ">=1.26.0" },
+    { name = "mcp", specifier = ">=1.26.0,<2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
 ]
 provides-extras = ["claude", "codex", "antigravity", "gemini", "all-providers"]

@@ -299,8 +299,8 @@ class Toolset:
         AQL query by first inspecting the schema to understand available object types and
         attributes, then constructing the appropriate query.
 
-        Claude decides whether the user's question asks for objects or an exact
-        count, plus whether it asks for an explicit result limit or all matching
+        The configured translator decides whether the question asks for objects
+        or an exact count, plus whether it asks for a result limit or all matching
         objects. Count requests use the Assets total-count endpoint.
 
         Examples:

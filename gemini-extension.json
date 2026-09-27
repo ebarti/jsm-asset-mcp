@@ -8,7 +8,8 @@
       "command": "uv",
       "args": [
         "run",
-        "--all-extras",
+        "--extra",
+        "gemini",
         "${extensionPath}/main.py"
       ],
       "cwd": "${extensionPath}",
@@ -19,6 +20,7 @@
         "JIRA_WORKSPACE_ID": "${JIRA_WORKSPACE_ID}",
         "JIRA_CLOUD_ID": "${JIRA_CLOUD_ID}",
         "LLM_PROVIDER": "${LLM_PROVIDER}",
+        "LLM_MODEL": "${LLM_MODEL}",
         "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
         "ANTHROPIC_VERTEX_PROJECT_ID": "${ANTHROPIC_VERTEX_PROJECT_ID}",
         "ANTHROPIC_VERTEX_REGION": "${ANTHROPIC_VERTEX_REGION}",
@@ -56,8 +58,13 @@
     },
     {
       "name": "LLM Provider",
-      "description": "LLM provider: 'anthropic' (default, direct API), 'anthropic-vertex' (Google Vertex AI), 'anthropic-bedrock' (Amazon Bedrock), or 'gemini' (Google AI Studio)",
+      "description": "LLM provider: anthropic, anthropic-vertex, anthropic-bedrock, gemini, codex, or antigravity. The bundled Gemini extra supports gemini and antigravity.",
       "envVar": "LLM_PROVIDER"
+    },
+    {
+      "name": "LLM Model",
+      "description": "Optional native model identifier for the selected provider",
+      "envVar": "LLM_MODEL"
     },
     {
       "name": "Anthropic API Key",

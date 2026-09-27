@@ -18,8 +18,14 @@ class SettingsDiscoveryTests(unittest.TestCase):
     def test_gemini_provider_model_defaults_to_gemini_2_5_pro(self) -> None:
         self.assertEqual(Settings(llm_provider="gemini").model_name, "gemini-2.5-pro")
 
-    def test_unknown_provider_model_falls_back_to_claude_opus_4_7(self) -> None:
-        self.assertEqual(Settings(llm_provider="unknown").model_name, "claude-opus-4-7")
+    def test_native_runtime_defaults_and_custom_model(self) -> None:
+        self.assertIsNone(Settings(llm_provider="codex").model_name)
+        self.assertIsNone(Settings(llm_provider="antigravity").model_name)
+        self.assertEqual(Settings(llm_provider="codex", llm_model="gpt-custom").model_name, "gpt-custom")
+
+    def test_unknown_provider_fails_instead_of_using_claude(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unknown LLM_PROVIDER"):
+            _ = Settings(llm_provider="unknown").model_name
 
     def test_vertex_region_defaults_to_global(self) -> None:
         self.assertEqual(Settings().anthropic_vertex_region, "global")
@@ -30,6 +36,7 @@ class SettingsDiscoveryTests(unittest.TestCase):
             {
                 "LLM_PROVIDER": "GEMINI",
                 "GEMINI_API_KEY": "test-gemini-key",
+                "LLM_MODEL": "gemini-custom",
             },
             clear=True,
         ):
@@ -38,6 +45,7 @@ class SettingsDiscoveryTests(unittest.TestCase):
         self.assertEqual(settings.llm_provider, "gemini")
         self.assertEqual(settings.active_llm_provider, "gemini")
         self.assertEqual(settings.gemini_api_key, "test-gemini-key")
+        self.assertEqual(settings.model_name, "gemini-custom")
 
 
     def test_resolve_cloud_id_uses_timeout(self) -> None:

@@ -11,7 +11,8 @@ class GeminiExtensionManifestTests(unittest.TestCase):
         server = manifest["mcpServers"]["jsm-asset-mcp"]
 
         self.assertEqual(server["command"], "uv")
-        self.assertIn("--all-extras", server["args"])
+        self.assertEqual(server["args"][0:3], ["run", "--extra", "gemini"])
+        self.assertNotIn("--all-extras", server["args"])
 
     def test_mcp_env_uses_supported_gemini_variable_syntax(self) -> None:
         manifest_path = Path(__file__).resolve().parents[1] / "gemini-extension.json"
@@ -40,6 +41,8 @@ class GeminiExtensionManifestTests(unittest.TestCase):
 
         self.assertIn("LLM_PROVIDER", server_env)
         self.assertIn("GEMINI_API_KEY", server_env)
+        self.assertIn("LLM_MODEL", server_env)
         self.assertNotIn("ANTHROPIC_PROVIDER", server_env)
         self.assertIn("LLM_PROVIDER", setting_env_vars)
         self.assertIn("GEMINI_API_KEY", setting_env_vars)
+        self.assertIn("LLM_MODEL", setting_env_vars)

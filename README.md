@@ -13,6 +13,7 @@ An MCP (Model Context Protocol) server for interacting with the Jira Cloud Asset
   - Google Cloud project with Vertex AI enabled
   - AWS account with Bedrock access
   - Google AI Studio API key (Gemini)
+  - OpenAI API key (Codex runtime)
 
 ## Setup
 
@@ -23,6 +24,13 @@ git clone https://github.com/your-org/jsm-asset-mcp.git
 cd jsm-asset-mcp
 uv sync
 ```
+
+The core install starts the 14-tool MCP server without installing an LLM provider.
+The `search_assets` tool needs a provider extra before it can translate questions.
+Install the extra for the provider you use before calling `search_assets`:
+`uv sync --extra claude`, `uv sync --extra codex`, or
+`uv sync --extra gemini` (`--extra antigravity` is equivalent for Antigravity).
+`uv sync --extra all-providers` installs all three runtimes.
 
 ### 2. Configure environment variables
 
@@ -40,7 +48,7 @@ JIRA_API_TOKEN=your_jira_api_token
 
 ### 3. Configure LLM provider
 
-The `search_assets` tool uses a structured-output LLM call to translate natural language into AQL queries. You can use Claude via the Claude Agent SDK (direct Anthropic API, Vertex AI, or Bedrock) or Gemini via Google AI Studio.
+The `search_assets` tool uses [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) 0.5.2 to translate natural language into AQL. The supported runtimes are Claude, Codex, and Antigravity. Existing `anthropic`, `anthropic-vertex`, and `anthropic-bedrock` settings use Claude; `gemini` uses Antigravity with a Google AI Studio key. Set `LLM_MODEL` to override the selected runtime's model. Codex and Antigravity otherwise use their native defaults.
 
 Set `LLM_PROVIDER` to choose your provider:
 
@@ -77,7 +85,7 @@ AWS_REGION=us-east-1   # optional, defaults to us-east-1
 
 Install the Gemini extra:
 ```bash
-uv pip install '.[gemini]'
+uv sync --extra gemini
 # or: pip install '.[gemini]'
 ```
 
@@ -87,6 +95,31 @@ Get an AI Studio API key from https://aistudio.google.com/apikey — no GCP proj
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key
 ```
+
+#### Option E: Codex
+
+Install `uv sync --extra codex`, then set:
+
+```env
+LLM_PROVIDER=codex
+OPENAI_API_KEY=your_openai_api_key
+# LLM_MODEL=your_supported_codex_model
+```
+
+Each translation uses an isolated temporary Codex home and thread so it cannot
+load your Codex login, instructions, tools, or MCP servers. It requires an
+explicit API key; an existing interactive Codex login is not reused.
+
+#### Option F: Antigravity
+
+Install `uv sync --extra antigravity` and set `LLM_PROVIDER=antigravity`.
+Use `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) for the Google API, or Google
+Application Default Credentials with a Vertex AI project and location. Use
+`LLM_MODEL` only when you want to override the runtime's native model.
+
+Every translation is bounded to 90 seconds and starts with no local tools,
+MCP servers, inherited settings, hooks, skills, or plugins. The server checks
+the returned structured AQL or search plan before sending a query to Assets.
 
 **Finding your Cloud ID:** Visit `https://your-domain.atlassian.net/_edge/tenant_info` in your browser — the `cloudId` field is what you need.
 
@@ -103,7 +136,7 @@ Add this to your Claude Desktop config file (`~/Library/Application Support/Clau
   "mcpServers": {
     "jsm-assets": {
       "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"],
+      "args": ["run", "--extra", "claude", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"],
       "env": {
         "JIRA_DOMAIN": "your-domain.atlassian.net",
         "JIRA_EMAIL": "your-email@example.com",
@@ -125,7 +158,7 @@ Add the MCP server to `.mcp.json` in your project root:
   "mcpServers": {
     "jsm-assets": {
       "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"],
+      "args": ["run", "--extra", "claude", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"],
       "env": {
         "JIRA_DOMAIN": "your-domain.atlassian.net",
         "JIRA_EMAIL": "your-email@example.com",
@@ -141,7 +174,7 @@ Add the MCP server to `.mcp.json` in your project root:
 Or add it via the CLI:
 
 ```bash
-claude mcp add jsm-assets -- uv run --directory /absolute/path/to/jsm-asset-mcp main.py
+claude mcp add jsm-assets -- uv run --extra claude --directory /absolute/path/to/jsm-asset-mcp main.py
 ```
 
 Then set the environment variables in your `.env` file or export them in your shell.
