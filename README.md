@@ -139,7 +139,7 @@ See [tool arguments and response semantics](docs/tools.md) and [inventory, lifec
 
 `execute_aql` runs your AQL directly. Its default is one 25-object page; `fetch_all=true` calls total-count and pages until complete. `search_assets` may return objects or an exact count based on the question, and its `_generated_aql` field lets you inspect the translation. A count question returns no object values. There is no separate count, grouping, ranking, export, or scheduling tool. To answer “which owner has the most licenses,” fetch the relevant objects and group their owner values in the host or another program; do not treat a natural-language question as a built-in aggregate query.
 
-Schema lists, type lists, attribute definitions, and summaries are cached for 600 seconds **per server process**. Object results are not cached. If you change your schema, restart the MCP server or wait for the cache to expire. A server handshake only proves stdio startup; try an explicit read-only schema or AQL call to test Jira access.
+`list_object_schemas` and `get_schema_summary` use a 600-second cache **per server process**. Building the summary also caches its internal type and attribute reads. In contrast, the public `get_object_schema`, `list_object_types`, and `get_object_type_attributes` tools fetch fresh data from Jira on each call; object and AQL results are not cached. After a schema change, those direct tools can show new definitions while the summary remains stale until its cache expires or the server restarts. A server handshake only proves stdio startup; try an explicit read-only schema or AQL call to test Jira access.
 
 ## Troubleshooting and verification limits
 
