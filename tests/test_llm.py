@@ -1,9 +1,19 @@
-import unittest
-from types import SimpleNamespace
-from typing import Any
-from unittest.mock import Mock, patch
+"""AQL translation contracts at the published kit/vendor adapter boundary."""
 
+import asyncio
+import json
+import os
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from agent_runtime_kit import AgentResult, AgentRuntimeKind, AgentTaskTimeoutError, ToolCallAudit
 from claude_agent_sdk import ResultMessage
+from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 
 from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.llm import (
@@ -12,382 +22,416 @@ from jsm_asset_mcp.llm import (
     SEARCH_PLAN_SCHEMA,
     SEARCH_PLAN_SYSTEM_PROMPT,
     SearchPlan,
+    _build_runtime,
+    _query_structured_output,
+    _to_gemini_schema,
     translate_to_aql,
     translate_to_search_plan,
 )
 
 
-def _result_message(structured_output: object, subtype: str = "success") -> ResultMessage:
+AQL = 'objectType = "Laptop"'
+PLAN = {"aql": AQL, "max_results": None, "fetch_all": False, "result_type": "objects"}
+
+
+def _claude_message(payload, *, error=False):
     return ResultMessage(
-        subtype=subtype,
+        subtype="error_during_execution" if error else "success",
         duration_ms=0,
         duration_api_ms=0,
-        is_error=subtype != "success",
+        is_error=error,
         num_turns=1,
         session_id="test-session",
         stop_reason=None,
         total_cost_usd=None,
         usage=None,
         result=None,
-        structured_output=structured_output,
+        structured_output=payload,
     )
 
 
-class QueryRecorder:
-    def __init__(self, structured_output: object, subtype: str = "success") -> None:
-        self.structured_output = structured_output
-        self.subtype = subtype
-        self.calls: list[dict[str, Any]] = []
+class TranslationPromptTests(unittest.TestCase):
+    def test_prompt_and_schema_keep_aql_and_count_contracts(self):
+        for fragment in ('STARTSWITH', 'objectSchemaId IN (1, 2)', 'inboundReferences(AQL)', 'connectedTickets()'):
+            self.assertIn(fragment, AQL_SYSTEM_PROMPT)
+        self.assertIn('`result_type` to "count"', SEARCH_PLAN_SYSTEM_PROMPT)
+        self.assertEqual(SEARCH_PLAN_SCHEMA["required"], ["aql", "max_results", "fetch_all", "result_type"])
+        self.assertFalse(AQL_QUERY_SCHEMA["additionalProperties"])
 
-    def __call__(self, *, prompt: str, options: object):
-        self.calls.append({"prompt": prompt, "options": options})
-
-        async def messages():
-            yield _result_message(self.structured_output, self.subtype)
-
-        return messages()
-
-
-class AqlSystemPromptTests(unittest.TestCase):
-    def test_prompt_covers_atlassian_aql_syntax_surface(self) -> None:
-        required_fragments = [
-            '<attribute-or-keyword> <operator> <value-or-function>',
-            'Name = "15\\" Screen"',
-            '"Belongs to Department".Name = "HR"',
-            "objectSchemaId IN (1, 2)",
-            "objectTypeId IN (1, 2)",
-            'Key = "ITSM-1111"',
-            "`==`: case-sensitive equality",
-            "`STARTSWITH` / `ENDSWITH`",
-            "`HAVING` / `NOT HAVING`",
-            "currentUser()",
-            "currentReporter()",
-            'user("admin", "manager")',
-            'group("jira-users")',
-            "currentProject()",
-            "inboundReferences(AQL)",
-            "inR(AQL, refTypes)",
-            "outboundReferences(AQL)",
-            "outR(AQL, refTypes)",
-            "connectedTickets(JQL query)",
-            "connectedTickets()",
-            "objectTypeAndChildren(Name)",
-            "${MyCustomField${0}}",
-            "ORDER BY <AttributeName|label> ASC|DESC",
-            "Reference function AQL arguments can contain other reference functions",
-            "Do not invent object schema IDs or object type IDs",
-            "Only one order attribute is supported",
-        ]
-
-        for fragment in required_fragments:
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, AQL_SYSTEM_PROMPT)
-
-    def test_search_plan_prompt_asks_llm_for_result_limit_semantics(self) -> None:
-        required_fragments = [
-            "If the user asks for all, every, complete, full, unlimited, or no-limit results",
-            "If the user asks to count objects",
-            '`result_type` to "count"',
-            "If the user explicitly asks for a specific number of results",
-            "If the user does not specify a result limit",
-            "default max_results parameter",
-        ]
-
-        self.assertNotIn("Respond with ONLY the AQL query string", SEARCH_PLAN_SYSTEM_PROMPT)
-        for fragment in required_fragments:
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, SEARCH_PLAN_SYSTEM_PROMPT)
-
-    def test_search_plan_schema_enforces_required_output_shape(self) -> None:
-        self.assertEqual(
-            SEARCH_PLAN_SCHEMA["required"],
-            ["aql", "max_results", "fetch_all", "result_type"],
-        )
-        self.assertFalse(SEARCH_PLAN_SCHEMA["additionalProperties"])
-        self.assertEqual(SEARCH_PLAN_SCHEMA["properties"]["aql"]["type"], "string")
-        self.assertEqual(SEARCH_PLAN_SCHEMA["properties"]["fetch_all"]["type"], "boolean")
-        self.assertEqual(SEARCH_PLAN_SCHEMA["properties"]["result_type"]["enum"], ["objects", "count"])
-
-
-class TranslateToAqlTests(unittest.TestCase):
-    def test_translate_to_aql_uses_agent_sdk_structured_output(self) -> None:
-        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
-        recorder = QueryRecorder({"aql": 'objectType = "Laptop"'})
-
-        with patch("jsm_asset_mcp.llm.query", recorder):
-            aql = translate_to_aql("find laptops", "schema", settings)
-
-        self.assertEqual(aql, 'objectType = "Laptop"')
-        call = recorder.calls[0]
-        self.assertIn("Translate this question to AQL", call["prompt"])
-        self.assertEqual(call["options"].model, "claude-opus-4-7")
-        self.assertEqual(call["options"].allowed_tools, [])
-        self.assertEqual(
-            call["options"].output_format,
-            {"type": "json_schema", "schema": AQL_QUERY_SCHEMA},
-        )
-        self.assertEqual(call["options"].env["ANTHROPIC_API_KEY"], "test-key")
-
-    def test_translate_to_search_plan_uses_agent_sdk_output_format(self) -> None:
-        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
-        recorder = QueryRecorder(
-            {
-                "aql": 'objectType = "Laptop"',
-                "max_results": 10,
-                "fetch_all": False,
-                "result_type": "objects",
-            }
-        )
-
-        with patch("jsm_asset_mcp.llm.query", recorder):
-            plan = translate_to_search_plan("show ten laptops", "schema", settings)
-
-        self.assertEqual(
-            plan,
-            SearchPlan(aql='objectType = "Laptop"', max_results=10, result_type="objects"),
-        )
-        call = recorder.calls[0]
-        self.assertEqual(
-            call["options"].output_format,
-            {"type": "json_schema", "schema": SEARCH_PLAN_SCHEMA},
-        )
-        self.assertNotIn("output_config", call)
-
-    def test_translate_to_search_plan_sets_vertex_environment(self) -> None:
-        settings = Settings(
-            llm_provider="anthropic-vertex",
-            anthropic_vertex_project_id="test-project",
-            anthropic_vertex_region="global",
-        )
-        recorder = QueryRecorder(
-            {
-                "aql": 'objectType = "Laptop"',
-                "max_results": None,
-                "fetch_all": False,
-                "result_type": "objects",
-            }
-        )
-
-        with patch("jsm_asset_mcp.llm.query", recorder):
-            plan = translate_to_search_plan("show laptops", "schema", settings)
-
-        self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"'))
-        self.assertEqual(
-            recorder.calls[0]["options"].env,
-            {
-                "CLAUDE_CODE_USE_VERTEX": "1",
-                "ANTHROPIC_VERTEX_PROJECT_ID": "test-project",
-                "CLOUD_ML_REGION": "global",
-            },
-        )
-
-    def test_translate_to_search_plan_parses_fetch_all_response(self) -> None:
-        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
-        recorder = QueryRecorder(
-            {
-                "aql": 'objectType = "Laptop"',
-                "max_results": None,
-                "fetch_all": True,
-                "result_type": "objects",
-            }
-        )
-
-        with patch("jsm_asset_mcp.llm.query", recorder):
-            plan = translate_to_search_plan("show all laptops", "schema", settings)
-
-        self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"', fetch_all=True))
-
-    def test_translate_to_search_plan_parses_count_response(self) -> None:
-        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
-        recorder = QueryRecorder(
-            {
-                "aql": 'objectType = "Laptop"',
-                "max_results": None,
-                "fetch_all": False,
-                "result_type": "count",
-            }
-        )
-
-        with patch("jsm_asset_mcp.llm.query", recorder):
-            plan = translate_to_search_plan("how many laptops", "schema", settings)
-
-        self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"', result_type="count"))
-
-    def test_translate_to_search_plan_rejects_extra_fields(self) -> None:
-        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
-        recorder = QueryRecorder(
-            {
-                "aql": 'objectType = "Laptop"',
-                "max_results": None,
-                "fetch_all": False,
-                "result_type": "objects",
-                "unexpected": "value",
-            }
-        )
-
-        with patch("jsm_asset_mcp.llm.query", recorder):
-            with self.assertRaisesRegex(ValueError, "unexpected search plan fields"):
-                translate_to_search_plan("show laptops", "schema", settings)
-
-    def test_translate_to_search_plan_requires_direct_api_key(self) -> None:
-        settings = Settings(llm_provider="anthropic")
-
-        with self.assertRaisesRegex(ValueError, "ANTHROPIC_API_KEY"):
-            translate_to_search_plan("show laptops", "schema", settings)
-
-
-class SchemaTranslationTests(unittest.TestCase):
-    def test_rewrites_anyof_with_null_to_nullable_flag(self) -> None:
-        from jsm_asset_mcp.llm import _to_gemini_schema
-
-        schema = {
-            "type": "object",
-            "properties": {
-                "max_results": {
-                    "anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}],
-                    "description": "n results",
-                },
-            },
-        }
-
-        result = _to_gemini_schema(schema)
-
-        self.assertEqual(
-            result["properties"]["max_results"],
-            {"type": "integer", "minimum": 1, "nullable": True, "description": "n results"},
-        )
-
-    def test_drops_additional_properties_for_gemini(self) -> None:
-        from jsm_asset_mcp.llm import _to_gemini_schema
-
-        result = _to_gemini_schema(
-            {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-                "additionalProperties": False,
-            }
-        )
-
-        self.assertNotIn("additionalProperties", result)
-        self.assertEqual(result["properties"]["name"], {"type": "string"})
-
-    def test_search_plan_schema_is_translatable_to_gemini(self) -> None:
-        from jsm_asset_mcp.llm import _to_gemini_schema
-
+    def test_google_response_schema_dialect(self):
         result = _to_gemini_schema(SEARCH_PLAN_SCHEMA)
-
-        self.assertEqual(result["type"], "object")
-        self.assertEqual(result["required"], ["aql", "max_results", "fetch_all", "result_type"])
         self.assertTrue(result["properties"]["max_results"]["nullable"])
         self.assertNotIn("additionalProperties", result)
 
 
-class FakeGeminiModels:
-    def __init__(self, response_text: str) -> None:
-        self.response_text = response_text
-        self.calls: list[dict[str, Any]] = []
+class ClaudeAdapterTests(unittest.TestCase):
+    def _run(self, settings, payload=PLAN, *, question="find laptops"):
+        calls = []
 
-    def generate_content(self, **kwargs):
-        self.calls.append(kwargs)
-        return SimpleNamespace(text=self.response_text)
+        async def query(*, prompt, options):
+            calls.append((prompt, options))
+            yield _claude_message(payload)
+
+        with patch("claude_agent_sdk.query", query):
+            result = translate_to_search_plan(question, "untrusted schema", settings)
+        return result, calls[0]
+
+    def test_all_claude_auth_aliases_use_kit_with_no_local_capabilities(self):
+        cases = [
+            (Settings(llm_provider="anthropic", anthropic_api_key="test-key"), "ANTHROPIC_API_KEY"),
+            (Settings(llm_provider="anthropic-vertex", anthropic_vertex_project_id="test-project"), "CLAUDE_CODE_USE_VERTEX"),
+            (Settings(llm_provider="anthropic-bedrock", aws_region="eu-west-1"), "CLAUDE_CODE_USE_BEDROCK"),
+        ]
+        for settings, auth_key in cases:
+            with self.subTest(provider=settings.active_llm_provider):
+                plan, (prompt, options) = self._run(settings)
+                self.assertEqual(plan, SearchPlan(aql=AQL))
+                self.assertIn("untrusted schema", prompt)
+                self.assertEqual(options.model, settings.model_name)
+                self.assertIsNone(options.model)
+                self.assertIn(auth_key, options.env)
+                self.assertEqual(options.tools, [])
+                self.assertEqual(options.allowed_tools, [])
+                self.assertEqual(options.mcp_servers, {})
+                self.assertEqual(options.setting_sources, [])
+                self.assertEqual(options.skills, [])
+                self.assertEqual(options.plugins, [])
+                self.assertEqual(options.hooks, {})
+                self.assertEqual(options.agents, {})
+                self.assertTrue(options.strict_mcp_config)
+                options.cli_path = "claude"
+                command = SubprocessCLITransport("probe", options)._build_command()
+                self.assertEqual(command[command.index("--tools") + 1], "")
+                self.assertIn("--strict-mcp-config", command)
+                self.assertIn("--setting-sources=", command)
+                self.assertIn("--bare", command)
+                self.assertNotIn("--mcp-config", command)
+                self.assertNotIn("--plugin-dir", command)
+                self.assertNotIn("--model", command)
+
+    def test_custom_model_and_aql_result_for_all_claude_aliases(self):
+        cases = [
+            Settings(llm_provider="anthropic", anthropic_api_key="test-key", llm_model="claude-custom"),
+            Settings(llm_provider="anthropic-vertex", anthropic_vertex_project_id="test-project", llm_model="claude-custom"),
+            Settings(llm_provider="anthropic-bedrock", llm_model="bedrock-custom"),
+        ]
+        for settings in cases:
+            with self.subTest(provider=settings.active_llm_provider):
+                calls = []
+
+                async def query(*, prompt, options):
+                    calls.append(options)
+                    yield _claude_message({"aql": AQL})
+
+                with patch("claude_agent_sdk.query", query):
+                    self.assertEqual(translate_to_aql("find laptops", "schema", settings), AQL)
+                self.assertEqual(calls[0].model, settings.llm_model)
+                calls[0].cli_path = "claude"
+                command = SubprocessCLITransport("probe", calls[0])._build_command()
+                self.assertEqual(command[command.index("--model") + 1], settings.llm_model)
+
+    def test_count_and_fetch_all_plans_preserve_search_semantics(self):
+        settings = Settings(llm_provider="anthropic", anthropic_api_key="test-key")
+        count, _ = self._run(settings, {**PLAN, "result_type": "count"})
+        all_objects, _ = self._run(settings, {**PLAN, "fetch_all": True})
+        self.assertEqual(count, SearchPlan(aql=AQL, result_type="count"))
+        self.assertEqual(all_objects, SearchPlan(aql=AQL, fetch_all=True))
+
+    def test_invalid_payload_and_vendor_failure_rejected(self):
+        for payload in (None, {"aql": ""}, {**PLAN, "extra": 1}, {**PLAN, "max_results": 0},
+                        {**PLAN, "fetch_all": "true"}, {**PLAN, "result_type": "other"},
+                        {**PLAN, "result_type": "count", "max_results": 2},
+                        {**PLAN, "fetch_all": True, "max_results": 2}):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    self._run(Settings(llm_provider="anthropic", anthropic_api_key="test-key"), payload)
+
+        async def error_query(*, prompt, options):
+            yield _claude_message(None, error=True)
+
+        with patch("claude_agent_sdk.query", error_query):
+            with self.assertRaisesRegex(ValueError, "translation failed"):
+                translate_to_aql("find", "schema", Settings(llm_provider="anthropic", anthropic_api_key="test-key"))
+
+    def test_missing_api_key_and_extra_fail_actionably(self):
+        with self.assertRaisesRegex(ValueError, "ANTHROPIC_API_KEY"):
+            translate_to_aql("find", "schema", Settings(llm_provider="anthropic"))
+        with patch.dict("sys.modules", {"claude_agent_sdk": None}):
+            with self.assertRaisesRegex(ImportError, "claude.*extra"):
+                _build_runtime(Settings(llm_provider="anthropic", anthropic_api_key="test"), Path("/tmp"))
 
 
-class FakeGeminiClient:
-    def __init__(self, response_text: str) -> None:
-        self.models = FakeGeminiModels(response_text)
+class AntigravityAdapterTests(unittest.TestCase):
+    def _run(self, provider, payload=PLAN, *, model=""):
+        configs = []
+        exits = []
 
+        class FakeAgent:
+            def __init__(self, config):
+                configs.append(config)
+                self.conversation_id = "synthetic-session"
 
-class GeminiBackendTests(unittest.TestCase):
-    def setUp(self) -> None:
-        config_class = type(
-            "GenerateContentConfig",
-            (),
-            {"__init__": lambda self, **kw: self.__dict__.update(kw)},
-        )
-        genai_types = SimpleNamespace(GenerateContentConfig=config_class)
-        genai_module = SimpleNamespace(types=genai_types)
-        self._patcher = patch.dict(
-            "sys.modules",
-            {
-                "google": SimpleNamespace(genai=genai_module),
-                "google.genai": genai_module,
-                "google.genai.types": genai_types,
-            },
-        )
-        self._patcher.start()
+            async def __aenter__(self):
+                return self
 
-    def tearDown(self) -> None:
-        self._patcher.stop()
+            async def __aexit__(self, *args):
+                exits.append(True)
 
-    def test_translate_to_aql_uses_gemini_json_mode(self) -> None:
-        client = FakeGeminiClient(response_text='{"aql": "objectType = \\"Laptop\\""}')
-        settings = Settings(llm_provider="gemini", gemini_api_key="test-key")
+            async def chat(self, goal):
+                async def chunks():
+                    if False:
+                        yield None
 
-        with patch("jsm_asset_mcp.llm._build_gemini_client", return_value=client):
-            aql = translate_to_aql("find laptops", "schema", settings)
+                return SimpleNamespace(chunks=chunks(), structured_output=lambda: payload)
 
-        self.assertEqual(aql, 'objectType = "Laptop"')
-        call = client.models.calls[0]
-        self.assertEqual(call["model"], "gemini-2.5-pro")
-        self.assertEqual(call["contents"][0].splitlines()[-1], "find laptops")
-        config = call["config"]
-        self.assertEqual(config.system_instruction, AQL_SYSTEM_PROMPT)
-        self.assertEqual(config.max_output_tokens, 512)
-        self.assertEqual(config.response_mime_type, "application/json")
-        self.assertEqual(config.response_schema["required"], ["aql"])
+        with patch("google.antigravity.agent.Agent", FakeAgent):
+            plan = translate_to_search_plan("find laptops", "untrusted schema", Settings(
+                llm_provider=provider, gemini_api_key="test-key", llm_model=model
+            ))
+        return plan, configs[0], exits
 
-    def test_translate_to_search_plan_uses_gemini_response_schema(self) -> None:
-        client = FakeGeminiClient(
-            response_text=(
-                '{"aql": "objectType = \\"Laptop\\"", '
-                '"max_results": null, "fetch_all": false, "result_type": "count"}'
-            )
-        )
-        settings = Settings(llm_provider="gemini", gemini_api_key="test-key")
+    def test_gemini_and_antigravity_use_tool_free_vendor_config_and_cleanup(self):
+        for provider in ("gemini", "antigravity"):
+            with self.subTest(provider=provider):
+                plan, config, exits = self._run(provider)
+                self.assertEqual(plan, SearchPlan(aql=AQL))
+                self.assertEqual(config.capabilities.enabled_tools, [])
+                self.assertFalse(config.capabilities.enable_subagents)
+                self.assertEqual(config.mcp_servers, [])
+                self.assertEqual(config.workspaces, [])
+                self.assertEqual(config.tools, [])
+                self.assertEqual(config.hooks, [])
+                self.assertEqual(config.triggers, [])
+                self.assertEqual(config.skills_paths, [])
+                self.assertEqual(config.api_key, "test-key")
+                self.assertIsNone(config.model)
+                self.assertEqual(exits, [True])
+                self.assertTrue(json.loads(config.response_schema)["properties"]["max_results"]["nullable"])
 
-        with patch("jsm_asset_mcp.llm._build_gemini_client", return_value=client):
-            plan = translate_to_search_plan("how many laptops", "schema", settings)
+    def test_custom_model_and_bad_structured_result(self):
+        _, config, _ = self._run("antigravity", model="gemini-custom")
+        self.assertEqual(config.model, "gemini-custom")
+        with self.assertRaises(ValueError):
+            self._run("gemini", {"aql": "", "max_results": None, "fetch_all": False, "result_type": "objects"})
 
-        self.assertEqual(plan, SearchPlan(aql='objectType = "Laptop"', result_type="count"))
-        config = client.models.calls[0]["config"]
-        self.assertEqual(config.max_output_tokens, 768)
-        self.assertEqual(config.response_mime_type, "application/json")
-        self.assertTrue(config.response_schema["properties"]["max_results"]["nullable"])
-        self.assertNotIn("additionalProperties", config.response_schema)
-
-    def test_translate_to_search_plan_strips_gemini_markdown_fence(self) -> None:
-        client = FakeGeminiClient(
-            response_text=(
-                '```json\n{"aql": "objectType = \\"Laptop\\"", '
-                '"max_results": 3, "fetch_all": false, "result_type": "objects"}\n```'
-            )
-        )
-        settings = Settings(llm_provider="gemini", gemini_api_key="test-key")
-
-        with patch("jsm_asset_mcp.llm._build_gemini_client", return_value=client):
-            plan = translate_to_search_plan("show three laptops", "schema", settings)
-
-        self.assertEqual(
-            plan,
-            SearchPlan(aql='objectType = "Laptop"', max_results=3, result_type="objects"),
-        )
-
-
-class BuildGeminiClientTests(unittest.TestCase):
-    def test_requires_gemini_api_key(self) -> None:
-        from jsm_asset_mcp.llm import _build_gemini_client
-
-        settings = Settings(llm_provider="gemini")
+    def test_missing_key_and_extra_fail_actionably(self):
         with self.assertRaisesRegex(ValueError, "GEMINI_API_KEY"):
-            _build_gemini_client(settings)
+            translate_to_aql("find", "schema", Settings(llm_provider="gemini"))
+        with patch.dict("sys.modules", {"google.antigravity": None}):
+            with self.assertRaisesRegex(ImportError, "gemini.*extra"):
+                _build_runtime(Settings(llm_provider="gemini", gemini_api_key="test"), Path("/tmp"))
 
-    def test_builds_genai_client_with_api_key(self) -> None:
-        from jsm_asset_mcp.llm import _build_gemini_client
 
-        settings = Settings(llm_provider="gemini", gemini_api_key="test-key")
-        fake_genai = SimpleNamespace(Client=Mock(return_value=SimpleNamespace(models=None)))
+class CodexAdapterTests(unittest.TestCase):
+    def test_raw_pinned_thread_start_disables_environments_and_closes(self):
+        starts = []
+        exits = []
+        configs = []
 
-        with patch.dict("sys.modules", {"google": SimpleNamespace(genai=fake_genai), "google.genai": fake_genai}):
-            _build_gemini_client(settings)
+        class FakeClient:
+            async def thread_start(self, params):
+                starts.append(params)
+                return SimpleNamespace(thread=SimpleNamespace(id="synthetic-thread"))
 
-        fake_genai.Client.assert_called_once_with(api_key="test-key")
+        class FakeCodex:
+            def __init__(self, config):
+                configs.append(config)
+                self._client = FakeClient()
+
+            async def _ensure_initialized(self):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                exits.append(True)
+
+        async def fake_run(thread, goal, *, cwd=None, approval_mode=None, sandbox=None,
+                           model=None, output_schema=None):
+            return SimpleNamespace(final_response=json.dumps(PLAN), status="completed", items=[], usage=None)
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "synthetic-key"}), \
+                patch("openai_codex.AsyncCodex", FakeCodex), \
+                patch("openai_codex.api.AsyncThread.run", fake_run):
+            plan = translate_to_search_plan("find laptops", "untrusted schema", Settings(llm_provider="codex", llm_model="gpt-custom"))
+        self.assertEqual(plan, SearchPlan(aql=AQL))
+        self.assertEqual(exits, [True])
+        self.assertEqual(starts[0]["environments"], [])
+        self.assertTrue(starts[0]["ephemeral"])
+        self.assertEqual(starts[0]["model"], "gpt-custom")
+        self.assertEqual(starts[0]["sandbox"], "read-only")
+        self.assertEqual(configs[0].experimental_api, True)
+        self.assertIn("features.plugins=false", configs[0].config_overrides)
+        self.assertIn("web_search=disabled", configs[0].config_overrides)
+        self.assertIn("CODEX_HOME", configs[0].env)
+        self.assertFalse(Path(configs[0].env["CODEX_HOME"]).exists())
+
+    def test_pinned_sdk_required(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "synthetic-key"}), \
+                patch("jsm_asset_mcp.llm.importlib.metadata.version", return_value="0.155.0"):
+            with TemporaryDirectory() as temp:
+                with self.assertRaisesRegex(RuntimeError, "0.154.0"):
+                    _build_runtime(Settings(llm_provider="codex"), Path(temp))
+
+    def test_missing_extra_is_actionable(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "synthetic-key"}), \
+                patch.dict("sys.modules", {"openai_codex": None}):
+            with TemporaryDirectory() as temp:
+                with self.assertRaisesRegex(ImportError, "codex.*extra"):
+                    _build_runtime(Settings(llm_provider="codex"), Path(temp))
+
+    def test_isolated_codex_requires_explicit_api_key(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
+            with TemporaryDirectory() as temp:
+                with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY"):
+                    _build_runtime(Settings(llm_provider="codex"), Path(temp))
+
+    def test_bundled_codex_native_request_has_no_tools_and_rejects_injected_command(self):
+        # Drive the real kit adapter, SDK, and bundled app-server against a local
+        # Responses API. A synthetic unadvertised command must not execute.
+        requests = []
+        with TemporaryDirectory() as ambient_home:
+            marker = Path(ambient_home) / "command-ran"
+            (Path(ambient_home) / "AGENTS.md").write_text("INHERITED-INSTRUCTION-MARKER")
+
+            class Handler(BaseHTTPRequestHandler):
+                def do_CONNECT(self):
+                    self.send_error(502)
+
+                def do_POST(self):
+                    request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                    requests.append(request)
+                    response_id = f"resp-{len(requests)}"
+                    if len(requests) == 1:
+                        item = {
+                            "type": "function_call",
+                            "call_id": "attempt-local-command",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": f"touch {marker}"}),
+                        }
+                    else:
+                        item = {
+                            "type": "message", "role": "assistant", "id": "msg-final",
+                            "content": [{"type": "output_text", "text": json.dumps({"aql": AQL})}],
+                        }
+                    events = [
+                        {"type": "response.created", "response": {"id": response_id}},
+                        {"type": "response.output_item.done", "item": item},
+                        {"type": "response.completed", "response": {
+                            "id": response_id,
+                            "usage": {"input_tokens": 0, "input_tokens_details": None,
+                                      "output_tokens": 0, "output_tokens_details": None,
+                                      "total_tokens": 0},
+                        }},
+                    ]
+                    body = "".join(
+                        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+                        for event in events
+                    ).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *args):
+                    pass
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}/v1"
+            original_builder = _build_runtime
+
+            def synthetic_builder(settings, data_dir):
+                runtime = original_builder(settings, data_dir)
+                runtime._config_overrides += (
+                    'model_provider="synthetic"',
+                    'model_providers.synthetic.name="Synthetic"',
+                    f'model_providers.synthetic.base_url="{base_url}"',
+                    'model_providers.synthetic.wire_api="responses"',
+                    'model_providers.synthetic.env_key="OPENAI_API_KEY"',
+                    "model_providers.synthetic.supports_websockets=false",
+                )
+                return runtime
+
+            proxy = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with patch.dict(os.environ, {
+                    "OPENAI_API_KEY": "synthetic-only-key",
+                    "CODEX_HOME": ambient_home,
+                    "HTTPS_PROXY": proxy,
+                    "HTTP_PROXY": proxy,
+                    "ALL_PROXY": proxy,
+                }), patch("jsm_asset_mcp.llm._build_runtime", synthetic_builder), \
+                        patch("jsm_asset_mcp.llm._TRANSLATION_TIMEOUT_SECONDS", 10):
+                    aql = translate_to_aql(
+                        "find a synthetic laptop", "Synthetic schema: Laptop Name",
+                        Settings(llm_provider="codex", llm_model="gpt-5.1"),
+                    )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+            self.assertEqual(aql, AQL)
+            self.assertGreaterEqual(len(requests), 2)
+            self.assertTrue(all(request.get("tools") == [] for request in requests))
+            self.assertTrue(all("INHERITED-INSTRUCTION-MARKER" not in json.dumps(request)
+                                for request in requests))
+            self.assertFalse(marker.exists())
+
+
+class ResultBoundaryTests(unittest.TestCase):
+    def test_deadline_cancels_runtime_and_closes_it(self):
+        class SlowRuntime:
+            kind = AgentRuntimeKind.CLAUDE_AGENT_SDK
+
+            def __init__(self):
+                self.cancelled = False
+                self.closed = False
+
+            async def run(self, task):
+                try:
+                    await asyncio.sleep(1)
+                except asyncio.CancelledError:
+                    self.cancelled = True
+                    raise
+
+            async def aclose(self):
+                self.closed = True
+
+        runtime = SlowRuntime()
+        with patch("jsm_asset_mcp.llm._build_runtime", return_value=runtime), \
+                patch("jsm_asset_mcp.llm._TRANSLATION_TIMEOUT_SECONDS", 0.01):
+            with self.assertRaises(AgentTaskTimeoutError):
+                asyncio.run(_query_structured_output("question", "system", SEARCH_PLAN_SCHEMA, Settings(), 100))
+        self.assertTrue(runtime.cancelled)
+        self.assertTrue(runtime.closed)
+
+    def test_timeout_cleanup_and_tool_audit_fail_closed(self):
+        class FakeRuntime:
+            kind = AgentRuntimeKind.CLAUDE_AGENT_SDK
+
+            def __init__(self, result):
+                self.result = result
+                self.closed = False
+
+            async def run(self, task):
+                return self.result
+
+            async def aclose(self):
+                self.closed = True
+
+        for result in (
+            AgentResult(output="", finish_reason="failed", error="provider error"),
+            AgentResult(output=json.dumps(PLAN), tool_calls=(ToolCallAudit(tool_name="read_file"),)),
+            AgentResult(output="not json"),
+        ):
+            with self.subTest(result=result):
+                fake = FakeRuntime(result)
+                with patch("jsm_asset_mcp.llm._build_runtime", return_value=fake):
+                    with self.assertRaises(ValueError):
+                        asyncio.run(_query_structured_output("question", "system", SEARCH_PLAN_SCHEMA, Settings(), 100))
+                self.assertTrue(fake.closed)

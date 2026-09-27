@@ -131,3 +131,43 @@ class SearchAssetsTests(unittest.TestCase):
         self.assertEqual([call["params"]["startAt"] for call in page_calls], [0, 2, 4])
         self.assertEqual(result["values"], self.client.values)
         self.assertEqual(result["_returned_count"], 5)
+
+    def test_aql_merge_retains_distinct_attribute_definitions_and_coherent_metadata(self) -> None:
+        first_attribute = {"globalId": "workspace:1", "id": "1", "name": "Name"}
+        second_attribute = {"globalId": "workspace:2", "id": "2", "name": "Status"}
+        pages = [
+            {
+                "startAt": 0, "maxResults": 2, "total": 3, "isLast": False, "last": False,
+                "values": [{"id": "a"}, {"id": "b"}],
+                "objectTypeAttributes": [first_attribute],
+                "pageNumber": 1, "pageSize": 2, "pageObjectSize": 2,
+                "startIndex": 1, "toIndex": 2, "totalFilterCount": 3,
+            },
+            {
+                "startAt": 2, "maxResults": 2, "total": 3, "isLast": True, "last": True,
+                "values": [{"id": "c"}],
+                "objectTypeAttributes": [first_attribute, second_attribute],
+                "pageNumber": 2, "pageSize": 1, "pageObjectSize": 2,
+                "startIndex": 3, "toIndex": 3, "totalFilterCount": 3,
+            },
+        ]
+        with patch.object(self.toolset, "_fetch_aql_total_count", return_value=3), patch.object(
+            self.toolset, "_fetch_aql_page", side_effect=pages
+        ):
+            result = self.toolset.execute_aql("objectType = Laptop", max_results=2, fetch_all=True)
+
+        self.assertEqual([entry["id"] for entry in result["values"]], ["a", "b", "c"])
+        self.assertEqual(result["objectTypeAttributes"], [first_attribute, second_attribute])
+        self.assertEqual(result["startAt"], 0)
+        self.assertEqual(result["maxResults"], 3)
+        self.assertEqual(result["total"], 3)
+        self.assertTrue(result["isLast"])
+        self.assertTrue(result["last"])
+        self.assertEqual(result["pageNumber"], 1)
+        self.assertEqual(result["pageSize"], 3)
+        self.assertEqual(result["pageObjectSize"], 3)
+        self.assertEqual(result["startIndex"], 1)
+        self.assertEqual(result["toIndex"], 3)
+        self.assertEqual(result["totalFilterCount"], 3)
+        self.assertEqual(result["_page_count"], 2)
+        self.assertTrue(result["_pagination_complete"])

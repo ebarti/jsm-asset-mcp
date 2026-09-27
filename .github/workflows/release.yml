@@ -54,7 +54,7 @@ jobs:
 
           with tarfile.open(artifact, "w:gz") as tar:
               for path in files:
-                  tar.add(path, arcname=(Path("jsm-asset-mcp") / path).as_posix())
+                  tar.add(path, arcname=path.as_posix())
 
           print(f"Created {artifact}")
           PY
@@ -73,13 +73,13 @@ jobs:
               names = set(tar.getnames())
 
           required = {
-              "jsm-asset-mcp/gemini-extension.json",
-              "jsm-asset-mcp/GEMINI.md",
-              "jsm-asset-mcp/README.md",
-              "jsm-asset-mcp/main.py",
-              "jsm-asset-mcp/pyproject.toml",
-              "jsm-asset-mcp/uv.lock",
-              "jsm-asset-mcp/jsm_asset_mcp/server.py",
+              "gemini-extension.json",
+              "GEMINI.md",
+              "README.md",
+              "main.py",
+              "pyproject.toml",
+              "uv.lock",
+              "jsm_asset_mcp/server.py",
           }
           missing = sorted(required - names)
           if missing:

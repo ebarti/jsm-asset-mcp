@@ -35,6 +35,7 @@ class Settings:
 
     # LLM provider selection
     llm_provider: str = ""
+    llm_model: str = ""
 
     # Anthropic API direct
     anthropic_api_key: str = ""
@@ -49,13 +50,15 @@ class Settings:
     # Gemini (Google AI Studio)
     gemini_api_key: str = ""
 
-    # Model names per provider (not user-configurable, but here for clarity)
-    _model_names: dict[str, str] = field(
+    # Let each runtime choose its native model unless LLM_MODEL overrides it.
+    _model_names: dict[str, str | None] = field(
         default_factory=lambda: {
-            "anthropic": "claude-opus-4-7",
-            "anthropic-vertex": "claude-opus-4-7",
-            "anthropic-bedrock": "anthropic.claude-opus-4-7",
-            "gemini": "gemini-2.5-pro",
+            "anthropic": None,
+            "anthropic-vertex": None,
+            "anthropic-bedrock": None,
+            "gemini": None,
+            "codex": None,
+            "antigravity": None,
         },
         repr=False,
     )
@@ -73,6 +76,7 @@ class Settings:
             jira_workspace_id=os.environ.get("JIRA_WORKSPACE_ID", ""),
             jira_cloud_id=os.environ.get("JIRA_CLOUD_ID", ""),
             llm_provider=os.environ.get("LLM_PROVIDER", "anthropic").lower(),
+            llm_model=os.environ.get("LLM_MODEL", ""),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             anthropic_vertex_project_id=os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", ""),
             anthropic_vertex_region=os.environ.get("ANTHROPIC_VERTEX_REGION", "global"),
@@ -95,9 +99,11 @@ class Settings:
         return (self.llm_provider or "anthropic").lower()
 
     @property
-    def model_name(self) -> str:
+    def model_name(self) -> str | None:
         """Return the model identifier for the active provider."""
-        return self._model_names.get(self.active_llm_provider, self._model_names["anthropic"])
+        if self.active_llm_provider not in self._model_names:
+            raise ValueError(f"Unknown LLM_PROVIDER '{self.active_llm_provider}'. Supported values: {', '.join(sorted(self._model_names))}.")
+        return self.llm_model.strip() or self._model_names[self.active_llm_provider]
 
     def resolve_cloud_id(self) -> str:
         """Return ``cloud_id``, auto-discovering from ``jira_domain`` if needed."""
@@ -123,17 +129,23 @@ class Settings:
         if self.jira_workspace_id:
             return self.jira_workspace_id
 
-        if not self.jira_domain:
-            raise ValueError("JIRA_DOMAIN environment variable is required if JIRA_WORKSPACE_ID is not provided.")
-
-        url = f"https://{self.jira_domain}/rest/servicedeskapi/assets/workspace"
-        response = httpx.get(
-            url,
-            auth=self.auth,
-            headers={"Accept": "application/json"},
-            timeout=_DISCOVERY_TIMEOUT,
-        )
-        response.raise_for_status()
+        cloud_id = self.resolve_cloud_id()
+        gateway_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/servicedeskapi/assets/workspace"
+        request_options = {
+            "auth": self.auth,
+            "headers": {"Accept": "application/json"},
+            "timeout": _DISCOVERY_TIMEOUT,
+        }
+        try:
+            response = httpx.get(gateway_url, **request_options)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Classic tokens may still require the site-hosted JSM route.
+            if exc.response.status_code not in {401, 403, 404} or not self.jira_domain:
+                raise
+            legacy_url = f"https://{self.jira_domain}/rest/servicedeskapi/assets/workspace"
+            response = httpx.get(legacy_url, **request_options)
+            response.raise_for_status()
 
         data = response.json()
         workspace_id = (

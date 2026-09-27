@@ -9,6 +9,7 @@
       "args": [
         "run",
         "--all-extras",
+        "--frozen",
         "${extensionPath}/main.py"
       ],
       "cwd": "${extensionPath}",
@@ -19,11 +20,13 @@
         "JIRA_WORKSPACE_ID": "${JIRA_WORKSPACE_ID}",
         "JIRA_CLOUD_ID": "${JIRA_CLOUD_ID}",
         "LLM_PROVIDER": "${LLM_PROVIDER}",
+        "LLM_MODEL": "${LLM_MODEL}",
         "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
         "ANTHROPIC_VERTEX_PROJECT_ID": "${ANTHROPIC_VERTEX_PROJECT_ID}",
         "ANTHROPIC_VERTEX_REGION": "${ANTHROPIC_VERTEX_REGION}",
         "AWS_REGION": "${AWS_REGION}",
-        "GEMINI_API_KEY": "${GEMINI_API_KEY}"
+        "GEMINI_API_KEY": "${GEMINI_API_KEY}",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
       }
     }
   },
@@ -56,8 +59,13 @@
     },
     {
       "name": "LLM Provider",
-      "description": "LLM provider: 'anthropic' (default, direct API), 'anthropic-vertex' (Google Vertex AI), 'anthropic-bedrock' (Amazon Bedrock), or 'gemini' (Google AI Studio)",
+      "description": "LLM provider: anthropic, anthropic-vertex, anthropic-bedrock, gemini, codex, or antigravity. All listed runtimes are installed by this extension.",
       "envVar": "LLM_PROVIDER"
+    },
+    {
+      "name": "LLM Model",
+      "description": "Optional native model identifier for the selected provider",
+      "envVar": "LLM_MODEL"
     },
     {
       "name": "Anthropic API Key",
@@ -84,6 +92,12 @@
       "name": "Gemini API Key",
       "description": "(Required for provider=gemini) Your Google AI Studio API key (https://aistudio.google.com/apikey)",
       "envVar": "GEMINI_API_KEY",
+      "sensitive": true
+    },
+    {
+      "name": "OpenAI API Key",
+      "description": "(Required for provider=codex) Your OpenAI API key; the interactive Codex login is not reused",
+      "envVar": "OPENAI_API_KEY",
       "sensitive": true
     }
   ]

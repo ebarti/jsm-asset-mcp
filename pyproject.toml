@@ -5,11 +5,15 @@ description = "MCP server for Jira Service Management Assets (Insight) API"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "claude-agent-sdk>=0.1.65",
+    "agent-runtime-kit==0.5.2",
     "httpx>=0.28.1",
-    "mcp>=1.26.0",
+    "mcp>=1.26.0,<2",
     "python-dotenv>=1.2.1",
 ]
 
 [project.optional-dependencies]
-gemini = ["google-genai>=1.0"]
+claude = ["agent-runtime-kit[claude]==0.5.2"]
+codex = ["agent-runtime-kit[codex]==0.5.2"]
+antigravity = ["agent-runtime-kit[antigravity]==0.5.2"]
+gemini = ["agent-runtime-kit[antigravity]==0.5.2"]
+all-providers = ["agent-runtime-kit[all]==0.5.2"]

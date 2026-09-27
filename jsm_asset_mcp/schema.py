@@ -31,13 +31,77 @@ class SchemaService:
 
     def fetch_all_schemas(self) -> list[dict]:
         """Return all object schemas in the workspace."""
-        cached = self._cache.get("schemas")
+        return self.fetch_all_schemas_response()["values"]
+
+    def fetch_all_schemas_response(self) -> dict:
+        """Return a complete schema-list response, caching only completed scans."""
+        cached = self._cache.get("schemas_response")
         if cached is not None:
             return cached
-        result = self._client.get("/objectschema/list")
-        schemas = result.get("values", result.get("objectSchemas", []))
-        self._cache.set("schemas", schemas)
-        return schemas
+
+        schemas: list[dict] = []
+        start_at = 0
+        page_size = 25
+        expected_total: int | None = None
+        first_page: dict | None = None
+        previous_values: list[dict] | None = None
+
+        while True:
+            page = self._client.get(
+                "/objectschema/list",
+                params={"startAt": start_at, "maxResults": page_size},
+            )
+            if not isinstance(page, dict):
+                raise ValueError("Assets schema list response must be an object.")
+            if first_page is None:
+                first_page = page
+
+            values = page.get("values", page.get("objectSchemas"))
+            if not isinstance(values, list):
+                raise ValueError("Assets schema list response must contain a schema list.")
+            page_start = page.get("startAt", start_at)
+            if isinstance(page_start, bool) or not isinstance(page_start, int) or page_start != start_at:
+                raise ValueError("Assets schema list page did not advance to the requested offset.")
+            if previous_values is not None and values and values == previous_values:
+                raise ValueError("Assets schema list returned the same page twice.")
+
+            total = page.get("total")
+            if total is not None:
+                if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+                    raise ValueError("Assets schema list total must be a non-negative integer.")
+                if expected_total is not None and total != expected_total:
+                    raise ValueError("Assets schema list total changed during pagination.")
+                expected_total = total
+
+            schemas.extend(values)
+            last = page.get("isLast", page.get("last"))
+            if isinstance(last, str):
+                last = last.lower() == "true"
+            if last is True or (expected_total is not None and len(schemas) >= expected_total):
+                if expected_total is not None and len(schemas) != expected_total:
+                    raise ValueError("Assets schema list ended before its reported total.")
+                break
+            if not values:
+                if start_at == 0 and expected_total is None and last is None:
+                    break
+                raise ValueError("Assets schema list returned an empty nonterminal page.")
+            if last is None and expected_total is None and len(values) < page_size:
+                break
+
+            previous_values = values
+            start_at = page_start + len(values)
+
+        response = dict(first_page)
+        response["startAt"] = 0
+        response["maxResults"] = len(schemas)
+        response["total"] = expected_total if expected_total is not None else len(schemas)
+        response["values"] = schemas
+        if "objectSchemas" in response:
+            response["objectSchemas"] = schemas
+        response["isLast"] = True
+        response["last"] = True
+        self._cache.set("schemas_response", response)
+        return response
 
     def fetch_object_types(self, schema_id: str) -> list[dict]:
         """Return all object types for a given schema (flat list)."""
