@@ -35,6 +35,7 @@ class Settings:
 
     # LLM provider selection
     llm_provider: str = ""
+    llm_model: str = ""
 
     # Anthropic API direct
     anthropic_api_key: str = ""
@@ -49,13 +50,16 @@ class Settings:
     # Gemini (Google AI Studio)
     gemini_api_key: str = ""
 
-    # Model names per provider (not user-configurable, but here for clarity)
-    _model_names: dict[str, str] = field(
+    # Native defaults for configured providers. Codex and Antigravity use their
+    # runtime defaults unless LLM_MODEL selects a specific model.
+    _model_names: dict[str, str | None] = field(
         default_factory=lambda: {
             "anthropic": "claude-opus-4-7",
             "anthropic-vertex": "claude-opus-4-7",
             "anthropic-bedrock": "anthropic.claude-opus-4-7",
             "gemini": "gemini-2.5-pro",
+            "codex": None,
+            "antigravity": None,
         },
         repr=False,
     )
@@ -73,6 +77,7 @@ class Settings:
             jira_workspace_id=os.environ.get("JIRA_WORKSPACE_ID", ""),
             jira_cloud_id=os.environ.get("JIRA_CLOUD_ID", ""),
             llm_provider=os.environ.get("LLM_PROVIDER", "anthropic").lower(),
+            llm_model=os.environ.get("LLM_MODEL", ""),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             anthropic_vertex_project_id=os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", ""),
             anthropic_vertex_region=os.environ.get("ANTHROPIC_VERTEX_REGION", "global"),
@@ -95,9 +100,11 @@ class Settings:
         return (self.llm_provider or "anthropic").lower()
 
     @property
-    def model_name(self) -> str:
+    def model_name(self) -> str | None:
         """Return the model identifier for the active provider."""
-        return self._model_names.get(self.active_llm_provider, self._model_names["anthropic"])
+        if self.active_llm_provider not in self._model_names:
+            raise ValueError(f"Unknown LLM_PROVIDER '{self.active_llm_provider}'. Supported values: {', '.join(sorted(self._model_names))}.")
+        return self.llm_model.strip() or self._model_names[self.active_llm_provider]
 
     def resolve_cloud_id(self) -> str:
         """Return ``cloud_id``, auto-discovering from ``jira_domain`` if needed."""

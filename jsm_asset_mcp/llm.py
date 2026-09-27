@@ -1,20 +1,24 @@
-"""LLM integration — Claude Agent SDK AQL translation.
+"""Tool-free AQL translation through agent-runtime-kit.
 
 Encapsulates provider environment selection, the AQL system prompt, and
-structured-output parsing for Claude Agent SDK calls.
+structured-output parsing for supported agent runtimes.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import logging
+import os
+import tempfile
 import threading
 from collections.abc import Awaitable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+from agent_runtime_kit import AgentKit, AgentTask, PermissionProfile
 
 from jsm_asset_mcp.config import Settings
 
@@ -307,51 +311,186 @@ def _strip_markdown_fence(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _gemini_response_text(response: object) -> str:
-    text = getattr(response, "text", None)
-    if not isinstance(text, str) or not text.strip():
-        raise ValueError("Gemini response did not contain text content.")
-    return text.strip()
+_TRANSLATION_TIMEOUT_SECONDS = 90
 
 
-def _build_gemini_client(settings: Settings) -> Any:
-    if not settings.gemini_api_key:
-        raise ValueError(
-            "GEMINI_API_KEY environment variable is required "
-            "when using the 'gemini' provider."
-        )
+def _claude_runtime(settings: Settings) -> Any:
     try:
-        from google import genai
+        from claude_agent_sdk import ClaudeAgentOptions, query
+        from agent_runtime_kit.adapters.claude import ClaudeAgentRuntime
+    except ImportError as exc:
+        raise ImportError("Claude support requires the 'claude' extra: pip install '.[claude]'.") from exc
+
+    class ToolFreeOptions(ClaudeAgentOptions):
+        def __init__(
+            self,
+            *,
+            permission_mode: str,
+            allowed_tools: list[str] | None = None,
+            disallowed_tools: list[str] | None = None,
+            **kwargs: Any,
+        ) -> None:
+            if allowed_tools or kwargs.get("mcp_servers") or kwargs.get("resume"):
+                raise ValueError("AQL translation cannot enable tools, MCP servers, or sessions.")
+            super().__init__(
+                **kwargs,
+                permission_mode=permission_mode,
+                tools=[],
+                allowed_tools=[],
+                disallowed_tools=disallowed_tools or [],
+                mcp_servers={},
+                strict_mcp_config=True,
+                setting_sources=[],
+                skills=[],
+                plugins=[],
+                hooks={},
+                agents={},
+                extra_args={"bare": None},
+                max_turns=1,
+            )
+
+    return ClaudeAgentRuntime(
+        default_model=settings.model_name,
+        env=_agent_env(settings),
+        options_cls=ToolFreeOptions,
+        query_func=query,
+    )
+
+
+def _antigravity_runtime(settings: Settings, data_dir: Path) -> Any:
+    try:
+        from google.antigravity import CapabilitiesConfig, LocalAgentConfig, types
+        from google.antigravity.agent import Agent
+        from google.antigravity.hooks import policy
+        from agent_runtime_kit.adapters.antigravity import AntigravityAgentRuntime
     except ImportError as exc:
         raise ImportError(
-            "The 'gemini' extra is required for Gemini support. "
-            "Install it with: pip install '.[gemini]'"
+            "Gemini/Antigravity support requires the 'gemini' or 'antigravity' extra: "
+            "pip install '.[gemini]'."
         ) from exc
-    logger.info("Using Google Gemini via AI Studio")
-    return genai.Client(api_key=settings.gemini_api_key)
+
+    if settings.active_llm_provider == "gemini" and not settings.gemini_api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is required for the 'gemini' provider.")
+
+    class ToolFreeConfig(LocalAgentConfig):
+        def __init__(
+            self,
+            *,
+            capabilities: CapabilitiesConfig,
+            policies: list[Any],
+            workspaces: list[str] | None = None,
+            api_key: str | None = None,
+            vertex: bool | None = None,
+            **kwargs: Any,
+        ) -> None:
+            if kwargs.get("mcp_servers") or kwargs.get("tools") or kwargs.get("subagents"):
+                raise ValueError("AQL translation cannot enable local tools or MCP servers.")
+            response_schema = kwargs.pop("response_schema", None)
+            for key in ("mcp_servers", "tools", "subagents", "hooks", "triggers", "skills_paths"):
+                kwargs.pop(key, None)
+            super().__init__(
+                **kwargs,
+                api_key=api_key,
+                vertex=vertex,
+                capabilities=CapabilitiesConfig(enabled_tools=[], enable_subagents=False),
+                policies=[],
+                workspaces=[],
+                tools=[],
+                hooks=[],
+                triggers=[],
+                mcp_servers=[],
+                subagents=[],
+                skills_paths=[],
+                response_schema=_to_gemini_schema(response_schema)
+                if response_schema is not None else None,
+            )
+
+    return AntigravityAgentRuntime(
+        default_model=settings.model_name,
+        api_key=settings.gemini_api_key or None,
+        vertex=False if settings.active_llm_provider == "gemini" else None,
+        data_dir=data_dir,
+        agent_cls=Agent,
+        config_cls=ToolFreeConfig,
+        types_module=types,
+        policy_module=policy,
+    )
 
 
-def _query_gemini_structured_output(
-    prompt: str,
-    system_prompt: str,
-    schema: dict[str, Any],
-    settings: Settings,
-    max_tokens: int,
-) -> object:
-    from google.genai import types as genai_types
+def _codex_runtime(settings: Settings, data_dir: Path) -> Any:
+    try:
+        from openai_codex import ApprovalMode, AsyncCodex, CodexConfig, Sandbox
+        from openai_codex.api import AsyncThread
+        from openai_codex._approval_mode import _approval_mode_settings
+        from openai_codex._sandbox import _sandbox_mode
+        from openai_codex.generated.v2_all import ThreadStartParams
+        from agent_runtime_kit.adapters.codex import CodexAgentRuntime
+    except ImportError as exc:
+        raise ImportError("Codex support requires the 'codex' extra: pip install '.[codex]'.") from exc
 
-    client = _build_gemini_client(settings)
-    response = client.models.generate_content(
-        model=settings.model_name,
-        contents=[prompt],
-        config=genai_types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=max_tokens,
-            response_mime_type="application/json",
-            response_schema=_to_gemini_schema(schema),
+    if importlib.metadata.version("openai-codex") != "0.154.0":
+        raise RuntimeError("Codex tool isolation is verified only with openai-codex 0.154.0.")
+
+    class IsolatedCodex(AsyncCodex):
+        async def thread_start(
+            self,
+            *,
+            approval_mode: ApprovalMode,
+            sandbox: Sandbox,
+            cwd: str | None = None,
+            developer_instructions: str | None = None,
+            model: str | None = None,
+        ) -> AsyncThread:
+            if sandbox != Sandbox.read_only:
+                raise ValueError("AQL translation requires a read-only Codex sandbox.")
+            await self._ensure_initialized()
+            approval_policy, approvals_reviewer = _approval_mode_settings(approval_mode)
+            params = ThreadStartParams(
+                approval_policy=approval_policy,
+                approvals_reviewer=approvals_reviewer,
+                cwd=cwd,
+                developer_instructions=developer_instructions,
+                model=model,
+                sandbox=_sandbox_mode(sandbox),
+                ephemeral=True,
+            ).model_dump(mode="json", by_alias=True, exclude_none=True)
+            # Pinned app-server experimental API: an explicit empty selection
+            # suppresses every environment and its local tool surface.
+            params["environments"] = []
+            started = await self._client.thread_start(params)
+            return AsyncThread(self, started.thread.id)
+
+        async def thread_resume(self, *args: Any, **kwargs: Any) -> Any:
+            raise ValueError("AQL translation must never resume a Codex session.")
+
+    isolated_env = {"CODEX_HOME": str(data_dir / "codex-home")}
+    (data_dir / "codex-home").mkdir(mode=0o700)
+    return CodexAgentRuntime(
+        default_model=settings.model_name,
+        codex_cls=IsolatedCodex,
+        config_cls=CodexConfig,
+        sandbox_cls=Sandbox,
+        approval_mode_cls=ApprovalMode,
+        env=isolated_env,
+        config_overrides=(
+            "features.plugins=false",
+            "features.shell_tool=false",
+            "features.view_image=false",
+            "web_search=disabled",
+            "mcp_servers={}",
         ),
     )
-    return json.loads(_strip_markdown_fence(_gemini_response_text(response)))
+
+
+def _build_runtime(settings: Settings, data_dir: Path) -> Any:
+    provider = settings.active_llm_provider
+    if provider in {"anthropic", "anthropic-vertex", "anthropic-bedrock"}:
+        return _claude_runtime(settings)
+    if provider in {"gemini", "antigravity"}:
+        return _antigravity_runtime(settings, data_dir)
+    if provider == "codex":
+        return _codex_runtime(settings, data_dir)
+    raise ValueError(f"Unknown LLM_PROVIDER '{provider}'.")
 
 
 async def _query_structured_output(
@@ -361,44 +500,35 @@ async def _query_structured_output(
     settings: Settings,
     max_tokens: int,
 ) -> object:
-    if settings.active_llm_provider == "gemini":
-        return _query_gemini_structured_output(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            schema=schema,
-            settings=settings,
-            max_tokens=max_tokens,
-        )
+    del max_tokens  # The kit exposes a task deadline, not a portable output-token cap.
+    with tempfile.TemporaryDirectory(prefix="jsm-aql-") as temporary_dir:
+        data_dir = Path(temporary_dir)
+        runtime = _build_runtime(settings, data_dir)
+        try:
+            task = AgentTask(
+                goal=prompt,
+                system=system_prompt,
+                model=settings.model_name,
+                working_directory=data_dir,
+                permissions=PermissionProfile(mode="strict", filesystem="read-only"),
+                output_schema=schema,
+            )
+            result = await AgentKit().run(runtime, task=task, timeout=_TRANSLATION_TIMEOUT_SECONDS)
+        finally:
+            await runtime.aclose()
 
-    # The CLI can load MCP servers and hooks from local settings even with no built-in tools.
-    options = ClaudeAgentOptions(
-        model=settings.model_name,
-        system_prompt=system_prompt,
-        tools=[],
-        allowed_tools=[],
-        mcp_servers={},
-        setting_sources=[],
-        skills=[],
-        extra_args={"strict-mcp-config": None, "bare": None},
-        max_turns=3,
-        output_format={"type": "json_schema", "schema": schema},
-        env=_agent_env(settings),
-    )
-
-    structured_output: object = _MISSING
-
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, ResultMessage):
-            if message.subtype == "success" and message.structured_output is not None:
-                structured_output = message.structured_output
-                continue
-
-            details = message.errors or message.result or message.subtype
-            raise ValueError(f"Claude Agent SDK structured output failed: {details}")
-
-    if structured_output is _MISSING:
-        raise ValueError("Claude Agent SDK response did not contain a result message.")
-    return structured_output
+    if not result.is_success:
+        raise ValueError(f"AQL translation failed: {result.error or result.finish_reason}")
+    if result.tool_calls:
+        raise ValueError("AQL translator unexpectedly reported tool use.")
+    if result.parsed_output_available:
+        return result.parsed_output
+    if result.output:
+        try:
+            return json.loads(_strip_markdown_fence(result.output))
+        except json.JSONDecodeError as exc:
+            raise ValueError("AQL translator did not return valid JSON.") from exc
+    raise ValueError("AQL translator did not return structured output.")
 
 
 def _run_async(awaitable: Awaitable[object]) -> object:
