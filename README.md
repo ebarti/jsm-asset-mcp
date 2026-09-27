@@ -181,7 +181,9 @@ Then set the environment variables in your `.env` file or export them in your sh
 
 ### Gemini
 
-See the included `gemini-extension.json` for Gemini-specific configuration.
+See the included `gemini-extension.json` for extension configuration. Its provider
+setting offers Claude, Codex, and Antigravity routes, so the extension installs
+all provider extras when it starts.
 
 ## Features / Available Tools
 

@@ -8,8 +8,7 @@
       "command": "uv",
       "args": [
         "run",
-        "--extra",
-        "gemini",
+        "--all-extras",
         "${extensionPath}/main.py"
       ],
       "cwd": "${extensionPath}",
@@ -25,7 +24,8 @@
         "ANTHROPIC_VERTEX_PROJECT_ID": "${ANTHROPIC_VERTEX_PROJECT_ID}",
         "ANTHROPIC_VERTEX_REGION": "${ANTHROPIC_VERTEX_REGION}",
         "AWS_REGION": "${AWS_REGION}",
-        "GEMINI_API_KEY": "${GEMINI_API_KEY}"
+        "GEMINI_API_KEY": "${GEMINI_API_KEY}",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
       }
     }
   },
@@ -58,7 +58,7 @@
     },
     {
       "name": "LLM Provider",
-      "description": "LLM provider: anthropic, anthropic-vertex, anthropic-bedrock, gemini, codex, or antigravity. The bundled Gemini extra supports gemini and antigravity.",
+      "description": "LLM provider: anthropic, anthropic-vertex, anthropic-bedrock, gemini, codex, or antigravity. All listed runtimes are installed by this extension.",
       "envVar": "LLM_PROVIDER"
     },
     {
@@ -91,6 +91,12 @@
       "name": "Gemini API Key",
       "description": "(Required for provider=gemini) Your Google AI Studio API key (https://aistudio.google.com/apikey)",
       "envVar": "GEMINI_API_KEY",
+      "sensitive": true
+    },
+    {
+      "name": "OpenAI API Key",
+      "description": "(Required for provider=codex) Your OpenAI API key; the interactive Codex login is not reused",
+      "envVar": "OPENAI_API_KEY",
       "sensitive": true
     }
   ]
