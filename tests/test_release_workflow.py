@@ -1,4 +1,6 @@
 import os
+import posixpath
+import re
 import shutil
 import subprocess
 import sys
@@ -19,7 +21,23 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("actions/setup-python@v5", self.workflow)
         self.assertIn("astral-sh/setup-uv@v5", self.workflow)
         self.assertIn("uv sync --all-extras --frozen", self.workflow)
-        self.assertIn("uv run --all-extras python -m unittest discover -s tests", self.workflow)
+        self.assertIn("uv run --all-extras --frozen python -m unittest discover -s tests", self.workflow)
+
+    def test_release_version_gate_accepts_matching_tag_and_rejects_mismatch(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        step = self.workflow.split("      - name: Verify release version\n", 1)[1]
+        step = step.split("      - name: Build extension archive\n", 1)[0]
+        script = step.split("python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+        for tag, expected_returncode in (("v1.2.0", 0), ("v1.2.1", 1)):
+            with self.subTest(tag=tag):
+                result = subprocess.run(
+                    [sys.executable, "-c", textwrap.dedent(script)],
+                    cwd=root,
+                    env={**os.environ, "GITHUB_REF_NAME": tag},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, expected_returncode, result.stderr)
 
     def test_release_workflow_builds_python_extension_archive(self) -> None:
         self.assertIn("gemini-extension.json", self.workflow)
@@ -37,10 +55,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             checkout = Path(temp_dir)
             (checkout / "dist").mkdir()
-            for name in ("gemini-extension.json", "GEMINI.md", "README.md", "main.py", "pyproject.toml", "uv.lock"):
+            for name in ("gemini-extension.json", "GEMINI.md", "README.md", "CHANGELOG.md", "LICENSE", "main.py", "pyproject.toml", "uv.lock"):
                 shutil.copy2(root / name, checkout / name)
             shutil.copytree(root / "jsm_asset_mcp", checkout / "jsm_asset_mcp", ignore=shutil.ignore_patterns("__pycache__"))
-            env = {**os.environ, "GITHUB_REF_NAME": "v-test"}
+            shutil.copytree(root / "docs", checkout / "docs", ignore=shutil.ignore_patterns("__pycache__"))
+            env = {**os.environ, "GITHUB_REF_NAME": "v1.2.0"}
             subprocess.run(
                 [sys.executable, "-c", textwrap.dedent(script)],
                 cwd=checkout,
@@ -50,12 +69,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 text=True,
             )
 
-            with tarfile.open(checkout / "dist" / "jsm-asset-mcp-v-test.tar.gz", "r:gz") as archive:
+            with tarfile.open(checkout / "dist" / "jsm-asset-mcp-v1.2.0.tar.gz", "r:gz") as archive:
                 names = set(archive.getnames())
+                markdown = {
+                    name: archive.extractfile(name).read().decode()
+                    for name in names if name.endswith(".md")
+                }
 
-        self.assertIn("gemini-extension.json", names)
-        self.assertIn("jsm_asset_mcp/server.py", names)
+        for name in ("gemini-extension.json", "LICENSE", "CHANGELOG.md", "docs/tools.md",
+                     "docs/recipes.md", "docs/examples/stdio_client.py",
+                     "docs/examples/.env.example", "jsm_asset_mcp/server.py"):
+            self.assertIn(name, names)
         self.assertNotIn("jsm-asset-mcp/gemini-extension.json", names)
+        for source, document in markdown.items():
+            for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document):
+                if link.startswith(("https://", "http://", "#")):
+                    continue
+                target = posixpath.normpath(posixpath.join(
+                    posixpath.dirname(source), link.split("#", 1)[0]
+                ))
+                with self.subTest(source=source, link=link):
+                    self.assertIn(target, names)
 
     def test_release_workflow_does_not_use_node_packaging(self) -> None:
         self.assertNotIn("setup-node", self.workflow)

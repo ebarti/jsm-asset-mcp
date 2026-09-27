@@ -506,7 +506,7 @@ wheels = [
 
 [[package]]
 name = "jsm-asset-mcp"
-version = "0.1.0"
+version = "1.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "agent-runtime-kit" },

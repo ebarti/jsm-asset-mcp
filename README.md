@@ -1,279 +1,159 @@
-# Jira Service Management Assets MCP Server
+# Jira Service Management Assets MCP server
 
-An MCP (Model Context Protocol) server for interacting with the Jira Cloud Assets REST API (formerly Insight). Enables LLMs to query, retrieve, create, update, and delete assets, as well as search using natural language.
+Connect Jira Cloud Assets to an MCP client. The server exposes **14 tools** for schema discovery, AQL search, object and ticket reads, and object create/update/delete. `search_assets` can translate a natural-language question to AQL through the supported [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) runtimes. The MCP host (Claude Desktop, Claude Code, Codex, Gemini CLI, or another stdio client) is independent of the translation provider you select.
 
-## Prerequisites
+Read the [complete tool reference](docs/tools.md) and [26 concrete recipes](docs/recipes.md). The [Python stdio example](docs/examples/stdio_client.py) lists all tools **offline by default**; its two optional Jira commands are read-only.
 
-- Python >= 3.10
-- [`uv`](https://docs.astral.sh/uv/) (recommended) or `pip`
-- Jira Cloud account with JSM Premium or Enterprise (Assets feature)
-- Jira API token ([create one here](https://id.atlassian.com/manage-profile/security/api-tokens))
-- **One** of the following for AI-powered natural language search:
-  - Anthropic API key (direct API access)
-  - Google Cloud project with Vertex AI enabled
-  - AWS account with Bedrock access
-  - Google AI Studio API key (Gemini)
-  - OpenAI API key (Codex runtime)
+## Install and check the connection
 
-## Setup
-
-### 1. Clone and install
+You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), a Jira Cloud site with Assets enabled, and a Jira identity permitted to read its workspace. Natural-language search additionally needs credentials for one of the supported translation providers. Direct Jira tools do not require a provider SDK or provider key.
 
 ```bash
-git clone https://github.com/your-org/jsm-asset-mcp.git
+git clone https://github.com/ebarti/jsm-asset-mcp.git
 cd jsm-asset-mcp
-uv sync
+uv sync --frozen
+uv run --frozen python docs/examples/stdio_client.py
 ```
 
-The core install starts the 14-tool MCP server without installing an LLM provider.
-The `search_assets` tool needs a provider extra before it can translate questions.
-Install the extra for the provider you use before calling `search_assets`:
-`uv sync --extra claude`, `uv sync --extra codex`, or
-`uv sync --extra gemini` (`--extra antigravity` is equivalent for Antigravity).
-`uv sync --extra all-providers` installs all three runtimes.
+The last command starts `main.py` over MCP stdio, initializes a session, and prints 14 tool names. It needs no Jira credentials and makes no Jira or paid-provider request. `uv run --frozen main.py` starts the same server and waits for an MCP client; it is **not** an interactive prompt or HTTP server. Keep protocol output on stdout and operational logs on stderr.
 
-### 2. Configure environment variables
+For explicit read-only requests, copy [the environment template](docs/examples/.env.example) to `.env` in the repository root, replace its placeholder values, and keep that file private. The repo ignores `.env`. Then run:
 
-Create a `.env` file in the project root:
-
-```env
-JIRA_DOMAIN=your-domain.atlassian.net
-JIRA_EMAIL=your-email@example.com
-JIRA_API_TOKEN=your_jira_api_token
-
-# Optional — auto-discovered if not set:
-# JIRA_CLOUD_ID=your_cloud_id
-# JIRA_WORKSPACE_ID=your_workspace_id
-```
-
-### 3. Configure LLM provider
-
-The `search_assets` tool uses [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) 0.5.2 to translate natural language into AQL. The supported runtimes are Claude, Codex, and Antigravity. Existing `anthropic`, `anthropic-vertex`, and `anthropic-bedrock` settings use Claude; `gemini` uses Antigravity with a Google AI Studio key. Every provider uses its runtime's native model by default. Set `LLM_MODEL` to override it, including for Bedrock.
-
-Set `LLM_PROVIDER` to choose your provider:
-
-#### Option A: Anthropic API (default)
-
-```env
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=your_anthropic_api_key
-```
-
-#### Option B: Google Vertex AI
-
-Authenticate with Google Cloud:
 ```bash
-gcloud auth application-default login
+uv run --frozen python docs/examples/stdio_client.py schemas
+uv run --frozen python docs/examples/stdio_client.py aql 'objectType = "Laptop"'
 ```
 
-```env
-LLM_PROVIDER=anthropic-vertex
-ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id
-ANTHROPIC_VERTEX_REGION=global   # optional, defaults to global
-```
+Those commands contact your Jira workspace. The AQL type name must exist in your schema. The example never calls create, update, delete, or `search_assets`.
 
-#### Option C: Amazon Bedrock
+Set `JIRA_DOMAIN` to the site hostname, for example `example.atlassian.net`, without `https://`. Set `JIRA_EMAIL` and `JIRA_API_TOKEN` for that Jira identity. The server looks up `JIRA_CLOUD_ID` through the site's tenant-info endpoint and `JIRA_WORKSPACE_ID` through the cloud gateway if you omit them. You may set both IDs explicitly to skip discovery; a cloud ID is not an Atlassian organization ID. The Assets API base URL is `https://api.atlassian.com/ex/jira/{cloudId}/jsm/assets/workspace/{workspaceId}/v1`. For classic tokens, workspace discovery can fall back to the site-hosted JSM route after a 401, 403, or 404 from the gateway. [Atlassian's token guidance](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/) explains token types and scopes.
 
-Ensure AWS credentials are configured (via `~/.aws/credentials`, env vars, or IAM role).
+## Natural-language translation providers
 
-```env
-LLM_PROVIDER=anthropic-bedrock
-AWS_REGION=us-east-1   # optional, defaults to us-east-1
-```
+Install the extra for the provider you use and set `LLM_PROVIDER` in your private `.env` or host environment. The names below are the exact supported values; `claude` is a runtime name, **not** an `LLM_PROVIDER` value. Every provider uses its runtime's native model unless `LLM_MODEL` overrides it.
 
-#### Option D: Google AI Studio (Gemini)
+| `LLM_PROVIDER` | Runtime / install extra | Authentication |
+| --- | --- | --- |
+| `anthropic` (default) | Claude / `claude` | `ANTHROPIC_API_KEY` |
+| `anthropic-vertex` | Claude / `claude` | `ANTHROPIC_VERTEX_PROJECT_ID`, optional `ANTHROPIC_VERTEX_REGION` (default `global`), and Google Cloud credentials |
+| `anthropic-bedrock` | Claude / `claude` | AWS credentials/role and optional `AWS_REGION` (default `us-east-1`) |
+| `gemini` | Antigravity / `gemini` | `GEMINI_API_KEY` for Google AI Studio |
+| `codex` | Codex / `codex` | Explicit `OPENAI_API_KEY` |
+| `antigravity` | Antigravity / `antigravity` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` for the Google API, or Google ADC with `GOOGLE_CLOUD_PROJECT` and optional `GOOGLE_CLOUD_LOCATION` (default `global`) |
 
-Install the Gemini extra:
 ```bash
-uv sync --extra gemini
-# or: pip install '.[gemini]'
+uv sync --extra claude --frozen       # the three Anthropic settings
+uv sync --extra codex --frozen        # codex
+uv sync --extra gemini --frozen       # gemini; --extra antigravity is equivalent
+uv sync --all-extras --frozen         # all advertised runtimes
 ```
 
-Get an AI Studio API key from https://aistudio.google.com/apikey — no GCP project needed.
+When an MCP host launches the server for `search_assets`, **keep the selected `--extra` or `--all-extras` in its `uv run` command**. A later `uv run` without it can resync the environment and remove provider packages even after `uv sync --extra`. Keep `--frozen` so the shipped lockfile is used even when a machine has an inherited uv freshness cutoff.
 
-```env
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key
-```
+The isolated Codex translation process cannot reuse your interactive Codex CLI login or local Codex settings. It requires `OPENAI_API_KEY` and the pinned `openai-codex` SDK/CLI shipped by the extra. Anthropic Vertex and Bedrock use their respective cloud credential chains. Gemini is the Google AI Studio route; `antigravity` is the more general Google API/ADC route. For the latter, use a Google API key or configure Application Default Credentials and a Vertex project (`gcloud auth application-default login` is one local setup path); set `GOOGLE_CLOUD_LOCATION` if `global` is unsuitable. Provider availability, model access, and billing are determined by those services, not by this repository. The server supports these three kit runtimes and six settings, not arbitrary installed providers.
 
-#### Option E: Codex
+`search_assets` sends the **complete schema summary and your question** to the configured translation runtime. It does not send object results as translator input. Direct tools make no translation-provider call, although the MCP host may process the returned data with its own model. Each translation has a 90-second deadline and no local tool, inherited MCP, plugin, hook, skill, or setting capability. The result is locally validated before the AQL query executes. Set your host's MCP **tool-call** timeout above 90 seconds—180 seconds is a reasonable starting point, and a large schema or slow Jira pages may need longer.
 
-Install `uv sync --extra codex`, then set:
+## Connect an MCP host
 
-```env
-LLM_PROVIDER=codex
-OPENAI_API_KEY=your_openai_api_key
-# LLM_MODEL=your_supported_codex_model
-```
-
-Each translation uses an isolated temporary Codex home and thread so it cannot
-load your Codex login, instructions, tools, or MCP servers. It requires an
-explicit API key; an existing interactive Codex login is not reused.
-
-#### Option F: Antigravity
-
-Install `uv sync --extra antigravity` and set `LLM_PROVIDER=antigravity`.
-Use `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) for the Google API, or Google
-Application Default Credentials with a Vertex AI project and location. Use
-`LLM_MODEL` only when you want to override the runtime's native model.
-
-Every translation is bounded to 90 seconds and starts with no local tools,
-MCP servers, inherited settings, hooks, skills, or plugins. The server checks
-the returned structured AQL or search plan before sending a query to Assets.
-
-**Finding your Cloud ID:** Visit `https://your-domain.atlassian.net/_edge/tenant_info` in your browser — the `cloudId` field is what you need.
-
-**Finding your Workspace ID:** The server discovers this automatically through `https://api.atlassian.com/ex/jira/{cloudId}/rest/servicedeskapi/assets/workspace`, which supports scoped API tokens. If that request returns 401, 403, or 404, it also tries the site-hosted JSM route for classic tokens. Set `JIRA_WORKSPACE_ID` to use a known ID without a discovery request.
-
-## Configuring with Claude
+Use an absolute path to your checkout or extracted extension. Store credentials in the ignored project `.env` or your host's private environment; do not commit filled-in host configuration. These commands launch the same local stdio server. If you want only direct Jira tools, omit `--extra` and keep `--frozen`.
 
 ### Claude Desktop
 
-Add this to your Claude Desktop config file (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+In the Claude Desktop MCP configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\Claude\claude_desktop_config.json` on Windows), add:
 
 ```json
 {
   "mcpServers": {
     "jsm-assets": {
       "command": "uv",
-      "args": ["run", "--extra", "claude", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"],
-      "env": {
-        "JIRA_DOMAIN": "your-domain.atlassian.net",
-        "JIRA_EMAIL": "your-email@example.com",
-        "JIRA_API_TOKEN": "your_jira_api_token",
-        "LLM_PROVIDER": "anthropic",
-        "ANTHROPIC_API_KEY": "your_anthropic_api_key"
-      }
+      "args": ["run", "--extra", "claude", "--frozen", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"]
     }
   }
 }
 ```
 
-### Claude Code (CLI)
+Set `LLM_PROVIDER=anthropic` (or a Vertex/Bedrock alias) and its credentials in the server checkout's private `.env`. Your Claude Desktop login is separate from the server's translation-provider credentials.
 
-Add the MCP server to `.mcp.json` in your project root:
+### Claude Code
+
+Add this entry to a project `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "jsm-assets": {
       "command": "uv",
-      "args": ["run", "--extra", "claude", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"],
-      "env": {
-        "JIRA_DOMAIN": "your-domain.atlassian.net",
-        "JIRA_EMAIL": "your-email@example.com",
-        "JIRA_API_TOKEN": "your_jira_api_token",
-        "LLM_PROVIDER": "anthropic",
-        "ANTHROPIC_API_KEY": "your_anthropic_api_key"
-      }
+      "args": ["run", "--extra", "claude", "--frozen", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"]
     }
   }
 }
 ```
 
-Or add it via the CLI:
+Or use the [documented stdio CLI form](https://code.claude.com/docs/en/mcp):
 
 ```bash
-claude mcp add jsm-assets -- uv run --extra claude --directory /absolute/path/to/jsm-asset-mcp main.py
+claude mcp add --transport stdio jsm-assets -- uv run --extra claude --frozen --directory /absolute/path/to/jsm-asset-mcp main.py
 ```
 
-Then set the environment variables in your `.env` file or export them in your shell.
+Protect the private `.env` in the server checkout. If you choose `LLM_PROVIDER=gemini` or `codex` while using Claude Code as the host, change this launcher extra to `gemini` or `codex` and set that provider's credentials.
 
-### Gemini
+### Codex
 
-See the included `gemini-extension.json` for extension configuration. Its provider
-setting offers Claude, Codex, and Antigravity routes, so the extension installs
-all provider extras from the shipped lockfile when it starts.
-
-## Features / Available Tools
-
-### Core CRUD
-
-| Tool | Description |
-|------|-------------|
-| `execute_aql` | Run an AQL (Asset Query Language) query with pagination |
-| `get_object` | Get a single asset object by ID |
-| `get_object_attributes` | Get all attributes of a specific object |
-| `create_object` | Create a new asset object |
-| `update_object` | Update an existing asset object |
-| `delete_object` | Delete an asset object |
-
-### Schema Introspection
-
-| Tool | Description |
-|------|-------------|
-| `list_object_schemas` | List all object schemas in the workspace |
-| `get_object_schema` | Get details of a specific schema |
-| `list_object_types` | List all object types in a schema |
-| `get_object_type_attributes` | Get attribute definitions for an object type |
-| `get_schema_summary` | Human-readable summary of all schemas, types, and attributes |
-
-### Natural Language Search
-
-| Tool | Description |
-|------|-------------|
-| `search_assets` | Search assets using natural language — automatically translates to AQL |
-
-### Related Data
-
-| Tool | Description |
-|------|-------------|
-| `get_object_history` | Get the change history of an object |
-| `get_connected_tickets` | Get Jira tickets linked to an asset |
-
-## Natural Language Search
-
-The `search_assets` tool lets you query assets without knowing AQL syntax. It uses the configured LLM to translate natural language into AQL:
-
-1. Inspects and caches the full schema (object types, attributes, and their data types)
-2. Sends the schema context and your question to the configured LLM for AQL generation
-3. Executes the generated AQL query
-4. Returns results along with the generated AQL for transparency
-
-For natural-language searches, the configured provider returns a structured search plan with the AQL query, result type, and intended result limit. If the user asks for a count or total, `search_assets` uses `/object/aql/totalcount` for the exact count. If the user asks for all matching objects, it paginates through each `/object/aql` page until all matches are returned. If the user asks for a specific number, that number is used as the result limit. If no limit is specified, the tool's `max_results` parameter is used as the default.
-
-Because the translation is AI-powered, it handles complex queries, synonyms, implied filters, and ambiguous phrasing far better than keyword matching. It understands your schema and can reason about which object types and attributes to query.
-
-**Examples:**
-
-```
-"Find all laptops assigned to John"
-"Show me servers that haven't been updated in the last 6 months"
-"Which departments have the most software licenses?"
-"List network equipment in the Sydney office that's currently offline"
-```
-
-The generated AQL is included in the response (`_generated_aql` field) so you can verify and refine queries.
-
-## AQL Reference
-
-For direct AQL queries via `execute_aql`, here are common patterns:
-
-```
-objectType = "Laptop"                           # All objects of a type
-Name = "my-server-01"                           # Exact match
-Name LIKE "server"                              # Contains
-Name STARTSWITH "prod-"                          # Prefix
-objectType = "Server" AND Status = "Active"     # Multiple conditions
-objectType = "Server" ORDER BY Name ASC         # Sorting
-```
-
-## API Base URL
-
-This server uses the official Atlassian Assets REST API:
-
-```
-https://api.atlassian.com/ex/jira/{cloudId}/jsm/assets/workspace/{workspaceId}/v1
-```
-
-The `cloudId` and `workspaceId` are auto-discovered from your `JIRA_DOMAIN` if not explicitly set.
-
-## Running Standalone
+From a terminal, add the stdio server with the [Codex MCP CLI](https://developers.openai.com/codex/mcp):
 
 ```bash
-uv run main.py
+codex mcp add jsm-assets -- uv run --extra codex --frozen --directory /absolute/path/to/jsm-asset-mcp main.py
 ```
 
-## License
+Alternatively, use `~/.codex/config.toml` or a project `.codex/config.toml`:
 
-MIT
+```toml
+[mcp_servers.jsm_assets]
+command = "uv"
+args = ["run", "--extra", "codex", "--frozen", "--directory", "/absolute/path/to/jsm-asset-mcp", "main.py"]
+cwd = "/absolute/path/to/jsm-asset-mcp"
+startup_timeout_sec = 30
+tool_timeout_sec = 180
+enabled_tools = ["list_object_schemas", "get_object_schema", "list_object_types", "get_object_type_attributes", "get_schema_summary", "execute_aql", "get_object", "get_object_attributes", "get_object_history", "get_connected_tickets", "search_assets"]
+```
+
+That allowlist excludes the three write tools from this Codex host. Configure the server's `LLM_PROVIDER=codex` and `OPENAI_API_KEY` in its private `.env`, or use Codex's `env_vars` forwarding for already-exported variables. The Codex MCP host login does **not** authenticate the server's isolated Codex translator.
+
+### Gemini CLI extension
+
+Install from the repository URL in a terminal, then answer the extension's Jira/provider settings prompts:
+
+```bash
+gemini extensions install https://github.com/ebarti/jsm-asset-mcp
+gemini extensions list
+# For a later published version:
+gemini extensions update jsm-asset-mcp
+```
+
+[Gemini's extension reference](https://geminicli.com/docs/extensions/reference/) documents install, update, and private settings. The extension's `gemini-extension.json` launches `uv run --all-extras --frozen`, because its settings offer all six provider values. The Gemini CLI host can use `LLM_PROVIDER=anthropic`, `codex`, or another supported route; the host and translation provider need not match. Restart Gemini CLI after changing extension settings or updating it.
+
+## Use the tools responsibly
+
+See [tool arguments and response semantics](docs/tools.md) and [inventory, lifecycle, incident, relationship, audit, and write recipes](docs/recipes.md). The server exposes **11 read-oriented tools and 3 write tools**. It does not enforce a read-only mode or approval before writes. Restrict the host's tool allowlist and the Jira identity's permissions if you need a read-only workflow. The Python example only offers offline listing and two read-only calls.
+
+`execute_aql` runs your AQL directly. Its default is one 25-object page; `fetch_all=true` calls total-count and pages until complete. `search_assets` may return objects or an exact count based on the question, and its `_generated_aql` field lets you inspect the translation. A count question returns no object values. There is no separate count, grouping, ranking, export, or scheduling tool. To answer “which owner has the most licenses,” fetch the relevant objects and group their owner values in the host or another program; do not treat a natural-language question as a built-in aggregate query.
+
+`list_object_schemas` and `get_schema_summary` use a 600-second cache **per server process**. Building the summary also caches its internal type and attribute reads. In contrast, the public `get_object_schema`, `list_object_types`, and `get_object_type_attributes` tools fetch fresh data from Jira on each call; object and AQL results are not cached. After a schema change, those direct tools can show new definitions while the summary remains stale until its cache expires or the server restarts. A server handshake only proves stdio startup; try an explicit read-only schema or AQL call to test Jira access.
+
+## Troubleshooting and verification limits
+
+| Symptom | Check |
+| --- | --- |
+| `uv` not found or server never starts | Install uv and use its absolute executable path in the host config if the host has a different `PATH`. Use an absolute checkout path and `--frozen`. |
+| `401` or `403` from Jira | Check the site hostname, email/token pair, token type and scopes, Assets permissions, and whether the cloud/workspace IDs belong to the same site. Do not replace a cloud ID with an organization ID. |
+| Empty type or object results | Confirm the schema ID, exact object type/attribute names, workspace, and AQL. An empty result is not proof of a broken connection. |
+| `Unknown LLM_PROVIDER` | Use one of the six exact lowercase values in the table. `claude` is not a provider setting. |
+| Missing provider extra or model error | Keep the matching `--extra` in every host `uv run`; check provider credentials and that `LLM_MODEL` is supported by that provider. Omit it to use the runtime default. |
+| Natural-language tool times out | Raise the host's tool timeout beyond the translator's 90 seconds, especially for large schemas or multiple Jira pages. Check provider availability separately from Jira. |
+
+Local tests and simulated provider responses cover the runtime integration. A separate read-only Jira check covered discovery, schema/type/attribute reads, AQL/count, object attributes/history, and connected tickets; it did not authorize or exercise live writes. Live translation-provider calls were not part of that check. Replace all fictional names and IDs in the examples with your own schema values.
+
+## License and release notes
+
+MIT; see [LICENSE](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for v1.2.0 changes since v1.1.0.

@@ -30,7 +30,29 @@ jobs:
         run: uv sync --all-extras --frozen
 
       - name: Run tests
-        run: uv run --all-extras python -m unittest discover -s tests
+        run: uv run --all-extras --frozen python -m unittest discover -s tests
+
+      - name: Verify release version
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          project = tomllib.loads(Path("pyproject.toml").read_text())
+          lock = tomllib.loads(Path("uv.lock").read_text())
+          manifest = json.loads(Path("gemini-extension.json").read_text())
+          version = project["project"]["version"]
+          local = [package["version"] for package in lock["package"]
+                   if package["name"] == "jsm-asset-mcp"]
+          if tag != f"v{version}" or manifest["version"] != version or local != [version]:
+              raise SystemExit("Tag, project, extension manifest, and lockfile versions differ")
+          if f"## {version}" not in Path("CHANGELOG.md").read_text():
+              raise SystemExit("CHANGELOG.md has no release notes for this version")
+          print(f"Release metadata matches {tag}")
+          PY
 
       - name: Build extension archive
         run: |
@@ -46,11 +68,16 @@ jobs:
               Path("gemini-extension.json"),
               Path("GEMINI.md"),
               Path("README.md"),
+              Path("CHANGELOG.md"),
+              Path("LICENSE"),
               Path("main.py"),
               Path("pyproject.toml"),
               Path("uv.lock"),
           ]
           files.extend(sorted(Path("jsm_asset_mcp").rglob("*.py")))
+          files.extend(sorted(Path("docs").rglob("*.md")))
+          files.extend(sorted(Path("docs").rglob("*.py")))
+          files.append(Path("docs/examples/.env.example"))
 
           with tarfile.open(artifact, "w:gz") as tar:
               for path in files:
@@ -76,10 +103,16 @@ jobs:
               "gemini-extension.json",
               "GEMINI.md",
               "README.md",
+              "CHANGELOG.md",
+              "LICENSE",
               "main.py",
               "pyproject.toml",
               "uv.lock",
               "jsm_asset_mcp/server.py",
+              "docs/tools.md",
+              "docs/recipes.md",
+              "docs/examples/stdio_client.py",
+              "docs/examples/.env.example",
           }
           missing = sorted(required - names)
           if missing:
@@ -90,4 +123,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.tar.gz
+          body_path: CHANGELOG.md
           fail_on_unmatched_files: true

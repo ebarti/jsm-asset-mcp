@@ -1,6 +1,6 @@
 [project]
 name = "jsm-asset-mcp"
-version = "0.1.0"
+version = "1.2.0"
 description = "MCP server for Jira Service Management Assets (Insight) API"
 readme = "README.md"
 requires-python = ">=3.10"
