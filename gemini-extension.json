@@ -26,6 +26,9 @@
         "ANTHROPIC_VERTEX_REGION": "${ANTHROPIC_VERTEX_REGION}",
         "AWS_REGION": "${AWS_REGION}",
         "GEMINI_API_KEY": "${GEMINI_API_KEY}",
+        "GOOGLE_API_KEY": "${GOOGLE_API_KEY}",
+        "GOOGLE_CLOUD_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
+        "GOOGLE_CLOUD_LOCATION": "${GOOGLE_CLOUD_LOCATION}",
         "OPENAI_API_KEY": "${OPENAI_API_KEY}"
       }
     }
@@ -93,6 +96,22 @@
       "description": "(Required for provider=gemini) Your Google AI Studio API key (https://aistudio.google.com/apikey)",
       "envVar": "GEMINI_API_KEY",
       "sensitive": true
+    },
+    {
+      "name": "Google API Key",
+      "description": "(Optional for provider=antigravity) Google API key when not using GEMINI_API_KEY or ADC",
+      "envVar": "GOOGLE_API_KEY",
+      "sensitive": true
+    },
+    {
+      "name": "Google Cloud Project",
+      "description": "(For provider=antigravity with ADC) Vertex AI project ID",
+      "envVar": "GOOGLE_CLOUD_PROJECT"
+    },
+    {
+      "name": "Google Cloud Location",
+      "description": "(Optional for provider=antigravity with ADC) Vertex AI location, defaults to global",
+      "envVar": "GOOGLE_CLOUD_LOCATION"
     },
     {
       "name": "OpenAI API Key",
