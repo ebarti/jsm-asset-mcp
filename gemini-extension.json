@@ -1,6 +1,6 @@
 {
   "name": "jsm-asset-mcp",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "description": "Jira Service Management Assets MCP Server",
   "contextFileName": "GEMINI.md",
   "mcpServers": {
