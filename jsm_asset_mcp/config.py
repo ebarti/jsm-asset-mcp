@@ -11,6 +11,36 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 _DISCOVERY_TIMEOUT = 30
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def _parse_bool(name: str, raw: str | None, default: bool) -> bool:
+    """Parse a boolean environment variable, rejecting unrecognised values.
+
+    Unset or empty means *default*. A typo is rejected rather than guessed.
+    """
+    value = (raw or "").strip().lower()
+    if not value:
+        return default
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    raise ValueError(f"{name} must be one of {sorted(_TRUE_VALUES | _FALSE_VALUES)}, got {raw!r}.")
+
+
+def _parse_positive_int(name: str, raw: str | None, default: int) -> int:
+    value = (raw or "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise ValueError(f"{name} must be a positive integer (seconds), got {raw!r}.") from None
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer (seconds), got {raw!r}.")
+    return parsed
 
 
 @dataclass
@@ -32,6 +62,11 @@ class Settings:
     jira_api_token: str = ""
     jira_workspace_id: str = ""
     jira_cloud_id: str = ""
+
+    # Schema metadata cache lifetime, and whether to build the schema
+    # summary in the background as soon as the server starts.
+    schema_cache_ttl: int = 600
+    schema_prefetch: bool = True
 
     # LLM provider selection
     llm_provider: str = ""
@@ -75,6 +110,12 @@ class Settings:
             jira_api_token=os.environ.get("JIRA_API_TOKEN", ""),
             jira_workspace_id=os.environ.get("JIRA_WORKSPACE_ID", ""),
             jira_cloud_id=os.environ.get("JIRA_CLOUD_ID", ""),
+            schema_cache_ttl=_parse_positive_int(
+                "JSM_SCHEMA_CACHE_TTL", os.environ.get("JSM_SCHEMA_CACHE_TTL"), 600
+            ),
+            schema_prefetch=_parse_bool(
+                "JSM_SCHEMA_PREFETCH", os.environ.get("JSM_SCHEMA_PREFETCH"), default=True
+            ),
             llm_provider=os.environ.get("LLM_PROVIDER", "anthropic").lower(),
             llm_model=os.environ.get("LLM_MODEL", ""),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
@@ -85,6 +126,13 @@ class Settings:
         )
 
     # ── Derived helpers ──────────────────────────────────────────────────
+
+    @property
+    def has_jira_credentials(self) -> bool:
+        """Whether enough is configured to attempt an Assets API call."""
+        return bool(
+            self.jira_email and self.jira_api_token and (self.jira_domain or self.jira_cloud_id)
+        )
 
     @property
     def auth(self) -> tuple[str, str]:

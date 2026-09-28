@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Build the schema summary in a background thread at startup when Jira credentials are configured, so the first `search_assets` does not pay for the schema crawl; `JSM_SCHEMA_PREFETCH=false` turns this off. Once expired, the previous summary is served while a background refresh runs.
+- Make the schema cache lifetime configurable with `JSM_SCHEMA_CACHE_TTL` (seconds, default 600).
+
 ## 1.2.0
 
 Changes since v1.1.0:

@@ -3,12 +3,23 @@
 Fetches object schemas, object types, and attribute definitions from the
 JSM Assets API and assembles them into a text summary used as LLM context
 for natural-language → AQL translation.
+
+Building the summary costs one API call per object type, which can take
+about a minute on a large workspace, so it can be prefetched in the
+background at startup (:meth:`SchemaService.warm`) and, once expired, is
+served stale while a background refresh runs.
 """
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
+
 from jsm_asset_mcp.cache import TTLCache
 from jsm_asset_mcp.client import AssetsClient
+
+logger = logging.getLogger(__name__)
 
 # Type-code → human-readable label mapping
 _TYPE_LABELS: dict[int, str] = {
@@ -23,9 +34,14 @@ _TYPE_LABELS: dict[int, str] = {
 class SchemaService:
     """Cacheable schema introspection backed by an :class:`AssetsClient`."""
 
-    def __init__(self, client: AssetsClient, cache: TTLCache) -> None:
+    def __init__(self, client: AssetsClient, cache: TTLCache, summary_ttl: float = 600) -> None:
         self._client = client
         self._cache = cache
+        self._summary_ttl = summary_ttl
+        self._summary: str | None = None
+        self._summary_built_at = 0.0
+        self._lock = threading.Lock()
+        self._refresh_thread: threading.Thread | None = None
 
     # ── Low-level fetchers (cached) ──────────────────────────────────────
 
@@ -126,16 +142,69 @@ class SchemaService:
     # ── High-level summary ───────────────────────────────────────────────
 
     def build_summary(self) -> str:
-        """Build a human-readable summary of the full Assets schema.
+        """Return the human-readable summary of the full Assets schema.
 
         The output is designed to be injected into an LLM prompt so it can
         reason about available object types and attributes when generating
         AQL queries.
-        """
-        cached = self._cache.get("schema_summary")
-        if cached is not None:
-            return cached
 
+        A fresh summary is returned as is. An expired one is still returned,
+        and a background refresh is started. With no summary yet, the call
+        waits for an in-flight prefetch, or builds synchronously.
+        """
+        with self._lock:
+            if self._summary is not None:
+                if time.monotonic() - self._summary_built_at >= self._summary_ttl:
+                    self._start_refresh_locked()
+                return self._summary
+            thread = self._refresh_thread
+
+        if thread is not None:
+            thread.join()
+            with self._lock:
+                if self._summary is not None:
+                    return self._summary
+
+        # No summary and no prefetch, or the prefetch failed: build now so
+        # the error, if any, reaches the caller.
+        return self._refresh()
+
+    def warm(self) -> None:
+        """Start building the summary in the background, without blocking."""
+        with self._lock:
+            self._start_refresh_locked()
+
+    def _start_refresh_locked(self) -> None:
+        if self._refresh_thread is not None and self._refresh_thread.is_alive():
+            return
+        self._refresh_thread = threading.Thread(
+            target=self._refresh_in_background,
+            name="schema-summary-refresh",
+            daemon=True,
+        )
+        self._refresh_thread.start()
+
+    def _refresh_in_background(self) -> None:
+        started = time.monotonic()
+        try:
+            summary = self._refresh()
+        except Exception:
+            logger.warning("Background schema summary refresh failed.", exc_info=True)
+            return
+        logger.info(
+            "Schema summary ready: %d characters in %.1fs.",
+            len(summary),
+            time.monotonic() - started,
+        )
+
+    def _refresh(self) -> str:
+        summary = self._compute_summary()
+        with self._lock:
+            self._summary = summary
+            self._summary_built_at = time.monotonic()
+        return summary
+
+    def _compute_summary(self) -> str:
         lines: list[str] = []
 
         for schema in self.fetch_all_schemas():
@@ -163,6 +232,4 @@ class SchemaService:
 
                     lines.append(f"  - {attr_name}: {type_label}")
 
-        summary = "\n".join(lines)
-        self._cache.set("schema_summary", summary)
-        return summary
+        return "\n".join(lines)

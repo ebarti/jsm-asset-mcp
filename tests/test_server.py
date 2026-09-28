@@ -30,9 +30,14 @@ class FakeClient:
 
 
 class FakeSchemaService:
-    def __init__(self, client: FakeClient, cache) -> None:
+    def __init__(self, client: FakeClient, cache, summary_ttl: float = 600) -> None:
         self.client = client
         self.cache = cache
+        self.summary_ttl = summary_ttl
+        self.warm_calls = 0
+
+    def warm(self) -> None:
+        self.warm_calls += 1
 
     def build_summary(self) -> str:
         return f"schema:{self.client.tag}"
