@@ -1,6 +1,6 @@
 # Tool reference
 
-The server exposes these **14** MCP tools. All names below are exact. Inputs are JSON objects; IDs are strings even when Jira displays them as numbers. The object schema, type, and attribute names in [the recipes](recipes.md) are fictional. Discover IDs with `list_object_schemas`, `list_object_types`, and `get_object_type_attributes` before using them. The `id` from an object response is the input to the object read/write tools; an object's display key (for example `LAB-1`) is useful in AQL but is not substituted for an ID in these calls.
+The server exposes these **14** MCP tools, or 11 with `JSM_READ_ONLY=true`. All names below are exact. Inputs are JSON objects; IDs are strings even when Jira displays them as numbers. The object schema, type, and attribute names in [the recipes](recipes.md) are fictional. Discover IDs with `list_object_schemas`, `list_object_types`, and `get_object_type_attributes` before using them. The `id` from an object response is the input to the object read/write tools; an object's display key (for example `LAB-1`) is useful in AQL but is not substituted for an ID in these calls.
 
 | Tool | Inputs | What it returns |
 | --- | --- | --- |
@@ -36,6 +36,11 @@ For writes, `attributes` is an array such as:
 ]
 ```
 
-The attribute ID must belong to the selected object type. The value shape and required attributes vary with your Assets schema. The server forwards creates, updates, and deletes to Jira; it does **not** impose a read-only policy, ask for confirmation, or provide rollback. Use host tool allowlists and an appropriately scoped Jira identity if you need read-only access. See the deliberately labeled [write sequence](recipes.md#controlled-write-example) before trying a mutation.
+The attribute ID must belong to the selected object type. The value shape and required attributes vary with your Assets schema. The server forwards creates, updates, and deletes to Jira; it does **not** ask for confirmation or provide rollback. Two optional settings narrow what it can change:
+
+- `JSM_READ_ONLY=true` stops the server from registering the three write tools at all, so no host can call them whatever its own allowlist says. The default is `false`. Unrecognised values stop the server at startup rather than being guessed.
+- `JSM_WRITE_SCHEMA_IDS=101,102` limits writes to those object schema IDs. Before each create, update, or delete, the server reads the target object or object type and refuses the call with an error if its schema is not listed, or cannot be determined. `update_object` checks both the object and the `object_type_id` it is written as. Unset (the default) or `*` allows every schema and makes no extra call.
+
+An appropriately scoped Jira identity is still the stronger boundary. See the deliberately labeled [write sequence](recipes.md#controlled-write-example) before trying a mutation.
 
 [AQL syntax reference](https://support.atlassian.com/assets/docs/use-assets-query-language-aql/) · [Assets object REST API](https://developer.atlassian.com/cloud/assets/rest/api-group-object/)

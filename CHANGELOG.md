@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add `JSM_READ_ONLY`: when `true`, `create_object`, `update_object`, and `delete_object` are not registered. Default `false`; unrecognised values fail at startup.
+- Add `JSM_WRITE_SCHEMA_IDS`: when set, writes are refused outside the listed object schema IDs, and when the target schema cannot be determined. Unset or `*` keeps today's behaviour.
+
 ## 1.2.0
 
 Changes since v1.1.0:
