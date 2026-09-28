@@ -44,13 +44,13 @@ class SettingsDiscoveryTests(unittest.TestCase):
 
     def test_resolve_cloud_id_uses_timeout(self) -> None:
         response = Mock()
-        response.json.return_value = {"cloudId": "cloud-123"}
+        response.json.return_value = {"cloudId": "11111111-2222-3333-4444-555555555555"}
 
         with patch("jsm_asset_mcp.config.httpx.get", return_value=response) as http_get:
             settings = Settings(jira_domain="example.atlassian.net")
             cloud_id = settings.resolve_cloud_id()
 
-        self.assertEqual(cloud_id, "cloud-123")
+        self.assertEqual(cloud_id, "11111111-2222-3333-4444-555555555555")
         http_get.assert_called_once_with(
             "https://example.atlassian.net/_edge/tenant_info",
             timeout=30,
@@ -58,19 +58,19 @@ class SettingsDiscoveryTests(unittest.TestCase):
 
     def test_resolve_workspace_id_uses_cloud_gateway(self) -> None:
         response = Mock()
-        response.json.return_value = {"workspaceId": "workspace-123"}
+        response.json.return_value = {"workspaceId": "66666666-7777-8888-9999-aaaaaaaaaaaa"}
 
         with patch("jsm_asset_mcp.config.httpx.get", return_value=response) as http_get:
             settings = Settings(
-                jira_cloud_id="cloud-123",
+                jira_cloud_id="11111111-2222-3333-4444-555555555555",
                 jira_email="user@example.com",
                 jira_api_token="token",
             )
             workspace_id = settings.resolve_workspace_id()
 
-        self.assertEqual(workspace_id, "workspace-123")
+        self.assertEqual(workspace_id, "66666666-7777-8888-9999-aaaaaaaaaaaa")
         http_get.assert_called_once_with(
-            "https://api.atlassian.com/ex/jira/cloud-123/rest/servicedeskapi/assets/workspace",
+            "https://api.atlassian.com/ex/jira/11111111-2222-3333-4444-555555555555/rest/servicedeskapi/assets/workspace",
             auth=("user@example.com", "token"),
             headers={"Accept": "application/json"},
             timeout=30,
@@ -78,26 +78,26 @@ class SettingsDiscoveryTests(unittest.TestCase):
 
     def test_workspace_id_bypasses_discovery_when_explicit(self) -> None:
         with patch("jsm_asset_mcp.config.httpx.get") as http_get:
-            settings = Settings(jira_workspace_id="workspace-123")
-            self.assertEqual(settings.resolve_workspace_id(), "workspace-123")
+            settings = Settings(jira_workspace_id="66666666-7777-8888-9999-aaaaaaaaaaaa")
+            self.assertEqual(settings.resolve_workspace_id(), "66666666-7777-8888-9999-aaaaaaaaaaaa")
         http_get.assert_not_called()
 
     def test_legacy_site_route_remains_available_for_unscoped_tokens(self) -> None:
         request = httpx.Request(
-            "GET", "https://api.atlassian.com/ex/jira/cloud-123/rest/servicedeskapi/assets/workspace"
+            "GET", "https://api.atlassian.com/ex/jira/11111111-2222-3333-4444-555555555555/rest/servicedeskapi/assets/workspace"
         )
         gateway_response = httpx.Response(401, request=request)
         legacy_response = Mock()
-        legacy_response.json.return_value = {"values": [{"workspaceId": "workspace-123"}]}
+        legacy_response.json.return_value = {"values": [{"workspaceId": "66666666-7777-8888-9999-aaaaaaaaaaaa"}]}
 
         with patch("jsm_asset_mcp.config.httpx.get", side_effect=[gateway_response, legacy_response]) as http_get:
             settings = Settings(
                 jira_domain="example.atlassian.net",
-                jira_cloud_id="cloud-123",
+                jira_cloud_id="11111111-2222-3333-4444-555555555555",
                 jira_email="user@example.com",
                 jira_api_token="token",
             )
-            self.assertEqual(settings.resolve_workspace_id(), "workspace-123")
+            self.assertEqual(settings.resolve_workspace_id(), "66666666-7777-8888-9999-aaaaaaaaaaaa")
 
         self.assertEqual(http_get.call_count, 2)
         self.assertEqual(

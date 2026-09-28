@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Validate `JIRA_DOMAIN` as a `<site>.atlassian.net` hostname at startup and before each discovery request, since workspace discovery can send the API token to it. Require `JIRA_CLOUD_ID` and `JIRA_WORKSPACE_ID`, from the environment or discovery, to be UUIDs before they reach an authenticated URL.
+
 ## 1.2.0
 
 Changes since v1.1.0:
