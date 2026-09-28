@@ -3,6 +3,8 @@ name = "jsm-asset-mcp"
 version = "1.2.0"
 description = "MCP server for Jira Service Management Assets (Insight) API"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "agent-runtime-kit==0.5.2",
