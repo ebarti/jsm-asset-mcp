@@ -17,3 +17,8 @@ codex = ["agent-runtime-kit[codex]==0.5.2"]
 antigravity = ["agent-runtime-kit[antigravity]==0.5.2"]
 gemini = ["agent-runtime-kit[antigravity]==0.5.2"]
 all-providers = ["agent-runtime-kit[all]==0.5.2"]
+
+[tool.uv]
+# Supply-chain cooldown: ignore releases younger than 8 days, so a
+# compromised upload has time to be detected and yanked before it is locked.
+exclude-newer = "P8D"
