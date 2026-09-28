@@ -15,6 +15,10 @@ from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.schema import SchemaService
 
 
+def _json_size(payload: object) -> int:
+    return len(json.dumps(payload, separators=(",", ":"), default=str))
+
+
 def _is_last_page(result: dict) -> bool:
     is_last = result.get("isLast")
     if isinstance(is_last, bool):
@@ -77,10 +81,13 @@ class Toolset:
             include_attributes: Include object attributes in response (default: True).
             fetch_all: When true, paginate until all matching objects are returned.
         """
+        self._check_paging(start_at, max_results)
         if fetch_all:
             return self._fetch_all_aql(query, start_at, max_results, include_attributes)
 
-        return self._fetch_aql_page(query, start_at, max_results, include_attributes)
+        page = self._fetch_aql_page(query, start_at, max_results, include_attributes)
+        self._check_result_size(_json_size(page), len(page.get("values", [])))
+        return page
 
     def get_object(self, object_id: str) -> dict:
         """Retrieve a single asset object by its ID.
@@ -199,6 +206,24 @@ class Toolset:
             raise ValueError("Assets total-count response did not contain an integer totalCount.")
         return total_count
 
+    def _check_paging(self, start_at: int, max_results: int) -> None:
+        cap = self.deps.settings.fetch_all_max_objects
+        if start_at < 0:
+            raise ValueError(f"start_at must be 0 or more; got {start_at}.")
+        if not 1 <= max_results <= cap:
+            raise ValueError(
+                f"max_results must be between 1 and {cap} (JSM_FETCH_ALL_MAX_OBJECTS); got {max_results}."
+            )
+
+    def _check_result_size(self, size: int, returned: int) -> None:
+        limit = self.deps.settings.max_result_bytes
+        if size > limit:
+            raise ValueError(
+                f"The AQL result reached {size} bytes after {returned} objects, above the "
+                f"{limit}-byte limit (JSM_MAX_RESULT_BYTES). Narrow the query, set "
+                "include_attributes=false, lower max_results, or ask for a count instead."
+            )
+
     def _fetch_all_aql(
         self,
         query: str,
@@ -213,9 +238,32 @@ class Toolset:
         if expected_total is None:
             expected_total = self._fetch_aql_total_count(query)
 
+        # Refuse before paginating: the total count is already known, so an
+        # oversized "all" request costs one call instead of hundreds.
+        cap = self.deps.settings.fetch_all_max_objects
+        remaining = max(expected_total - start_at, 0)
+        if remaining > cap:
+            raise ValueError(
+                f"The query matches {remaining} objects from start_at={start_at}, more than the "
+                f"fetch_all limit of {cap} (JSM_FETCH_ALL_MAX_OBJECTS). Narrow the AQL, ask for "
+                "a count, or page explicitly with start_at and max_results."
+            )
+        # Guard against an API whose totals and pages disagree.
+        max_pages = -(-cap // max_results) + 1
+        size = 0
+        returned = 0
+
         while True:
+            if len(pages) >= max_pages:
+                raise ValueError(
+                    f"fetch_all stopped after {len(pages)} pages without reaching the reported "
+                    f"total of {expected_total}; the Assets API pagination looks inconsistent."
+                )
             page = self._fetch_aql_page(query, next_start, max_results, include_attributes)
             pages.append(page)
+            size += _json_size(page)
+            returned += len(page.get("values", []))
+            self._check_result_size(size, returned)
 
             values = page.get("values", [])
             if _is_last_page(page):
@@ -318,6 +366,8 @@ class Toolset:
         """
         plan = self._translate_question(question)
         page_size = plan.max_results or max_results
+        if plan.result_type != "count":
+            self._check_paging(0, page_size)
         total_count = self._fetch_aql_total_count(plan.aql)
 
         if plan.result_type == "count":
@@ -344,6 +394,7 @@ class Toolset:
             )
         else:
             result = self._fetch_aql_page(plan.aql, 0, page_size, include_attributes=True)
+            self._check_result_size(_json_size(result), len(result.get("values", [])))
             result["total"] = total_count
             result["_total_count"] = total_count
 

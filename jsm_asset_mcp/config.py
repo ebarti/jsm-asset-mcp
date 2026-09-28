@@ -13,6 +13,19 @@ logger = logging.getLogger(__name__)
 _DISCOVERY_TIMEOUT = 30
 
 
+def _parse_positive_int(name: str, raw: str | None, default: int) -> int:
+    value = (raw or "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}.") from None
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}.")
+    return parsed
+
+
 @dataclass
 class Settings:
     """Application settings.
@@ -32,6 +45,12 @@ class Settings:
     jira_api_token: str = ""
     jira_workspace_id: str = ""
     jira_cloud_id: str = ""
+
+    # Bounds on what an AQL call may return to the host. An object with its
+    # attributes is typically 5-15 KiB of JSON, so the byte cap usually
+    # applies first; the object cap refuses oversized fetch_all up front.
+    fetch_all_max_objects: int = 500
+    max_result_bytes: int = 1_048_576
 
     # LLM provider selection
     llm_provider: str = ""
@@ -75,6 +94,12 @@ class Settings:
             jira_api_token=os.environ.get("JIRA_API_TOKEN", ""),
             jira_workspace_id=os.environ.get("JIRA_WORKSPACE_ID", ""),
             jira_cloud_id=os.environ.get("JIRA_CLOUD_ID", ""),
+            fetch_all_max_objects=_parse_positive_int(
+                "JSM_FETCH_ALL_MAX_OBJECTS", os.environ.get("JSM_FETCH_ALL_MAX_OBJECTS"), 500
+            ),
+            max_result_bytes=_parse_positive_int(
+                "JSM_MAX_RESULT_BYTES", os.environ.get("JSM_MAX_RESULT_BYTES"), 1_048_576
+            ),
             llm_provider=os.environ.get("LLM_PROVIDER", "anthropic").lower(),
             llm_model=os.environ.get("LLM_MODEL", ""),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),

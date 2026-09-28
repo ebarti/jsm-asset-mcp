@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Bound AQL results returned to the host. `fetch_all` is refused after the total-count call, before any page request, when more than `JSM_FETCH_ALL_MAX_OBJECTS` objects (default 500) match; `max_results`, including one chosen by the translator, is capped at the same value; any result above `JSM_MAX_RESULT_BYTES` (default 1 MiB) is refused; and a page-count guard stops a loop on inconsistent pagination. Counts are not limited.
+
 ## 1.2.0
 
 Changes since v1.1.0:
