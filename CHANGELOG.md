@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add `get_object_reference_info` (inbound reference counts by object type and reference type, for impact analysis), `list_status_types`, `list_reference_types`, and `get_usage`.
+- Include global and per-schema status and reference type names, and the target type of reference attributes, in the schema summary used by `search_assets`, so translations can use exact values. Label attribute types 3, 5, and 6 (Confluence, Version, Project).
+
 ## 1.2.0
 
 Changes since v1.1.0:

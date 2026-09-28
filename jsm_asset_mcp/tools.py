@@ -45,6 +45,7 @@ class Toolset:
             self.execute_aql,
             self.get_object,
             self.get_object_attributes,
+            self.get_object_reference_info,
             self.create_object,
             self.update_object,
             self.delete_object,
@@ -53,6 +54,9 @@ class Toolset:
             self.list_object_types,
             self.get_object_type_attributes,
             self.get_schema_summary,
+            self.list_status_types,
+            self.list_reference_types,
+            self.get_usage,
             self.search_assets,
             self.get_object_history,
             self.get_connected_tickets,
@@ -134,6 +138,21 @@ class Toolset:
         """
         return self.deps.client.delete(f"/object/{object_id}")
 
+    def get_object_reference_info(self, object_id: str) -> list[dict]:
+        """Summarise the objects that reference a given object (inbound
+        references), grouped by object type and reference type. Useful for
+        impact analysis ("what depends on this server?").
+
+        Returns counts, not the objects themselves. To list them, run
+        execute_aql with e.g. `object HAVING outboundReferences(Key = "ITSM-123")`
+        (objects pointing to ITSM-123), or `object HAVING
+        inboundReferences(Key = "ITSM-123")` (objects ITSM-123 points to).
+
+        Args:
+            object_id: The unique identifier of the asset object.
+        """
+        return self.deps.client.get(f"/object/{object_id}/referenceinfo")
+
     # ── Schema introspection ────────────────────────────────────────────
 
     def list_object_schemas(self) -> dict:
@@ -164,6 +183,46 @@ class Toolset:
             object_type_id: The ID of the object type.
         """
         return self.deps.client.get(f"/objecttype/{object_type_id}/attributes")
+
+    def list_status_types(self, schema_id: str = "") -> list[dict]:
+        """List status types, i.e. the valid values of Status attributes.
+
+        Use the exact names in AQL, e.g. `Status = "In Use"`.
+
+        Args:
+            schema_id: Optional object schema ID. Empty returns only global
+                status types; a schema ID returns global plus that schema's own.
+        """
+        statuses = self.deps.client.get("/config/statustype")
+        if schema_id:
+            statuses = statuses + self.deps.client.get(
+                "/config/statustype", params={"objectSchemaId": schema_id}
+            )
+        return statuses
+
+    def list_reference_types(self, schema_id: str = "") -> list[dict]:
+        """List reference types, i.e. the labels of links between objects
+        (e.g. "Installed", "Depends").
+
+        Use the exact names in AQL reference functions, e.g.
+        `object HAVING outR(objectType = "Host", refType IN ("Installed"))`.
+
+        Args:
+            schema_id: Optional object schema ID. Empty returns only global
+                reference types; a schema ID returns global plus that schema's own.
+        """
+        if not schema_id:
+            return self.deps.client.get("/config/referencetype")
+        return self.deps.client.get(
+            "/config/referencetype",
+            params={"objectSchemaId": schema_id, "includeAll": "true"},
+        )
+
+    def get_usage(self) -> dict:
+        """Get the total number of objects in the workspace and the object
+        count per schema. Useful for inventory overviews and licence tracking.
+        """
+        return self.deps.client.get("/usage")
 
     def get_schema_summary(self) -> str:
         """Get a human-readable summary of all object schemas, object types, and their

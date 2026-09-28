@@ -1,6 +1,6 @@
 # Tool reference
 
-The server exposes these **14** MCP tools. All names below are exact. Inputs are JSON objects; IDs are strings even when Jira displays them as numbers. The object schema, type, and attribute names in [the recipes](recipes.md) are fictional. Discover IDs with `list_object_schemas`, `list_object_types`, and `get_object_type_attributes` before using them. The `id` from an object response is the input to the object read/write tools; an object's display key (for example `LAB-1`) is useful in AQL but is not substituted for an ID in these calls.
+The server exposes these **18** MCP tools. All names below are exact. Inputs are JSON objects; IDs are strings even when Jira displays them as numbers. The object schema, type, and attribute names in [the recipes](recipes.md) are fictional. Discover IDs with `list_object_schemas`, `list_object_types`, and `get_object_type_attributes` before using them. The `id` from an object response is the input to the object read/write tools; an object's display key (for example `LAB-1`) is useful in AQL but is not substituted for an ID in these calls.
 
 | Tool | Inputs | What it returns |
 | --- | --- | --- |
@@ -8,12 +8,16 @@ The server exposes these **14** MCP tools. All names below are exact. Inputs are
 | `get_object_schema` | `schema_id` (required) | One schema's details. |
 | `list_object_types` | `schema_id` (required) | Flat list of types in that schema. |
 | `get_object_type_attributes` | `object_type_id` (required) | Attribute definitions, including `id` values needed for writes. |
-| `get_schema_summary` | None (`{}`) | Human-readable names and attribute types across all schemas. It can be large. |
+| `get_schema_summary` | None (`{}`) | Human-readable names and attribute types across all schemas, with each schema's status and reference type names and the target type of reference attributes. It can be large. |
+| `list_status_types` | `schema_id=""` | Status types. Empty returns the global ones; a schema ID adds that schema's own. |
+| `list_reference_types` | `schema_id=""` | Reference types (the `refType` names). Empty returns the global ones; a schema ID adds that schema's own. |
+| `get_usage` | None (`{}`) | Total object count and the object count per schema. |
 | `execute_aql` | `query` (required); `start_at=0`, `max_results=25`, `include_attributes=true`, `fetch_all=false` | One Assets AQL result page by default. With `fetch_all=true`, requests all pages and adds `_page_size`, `_page_count`, `_returned_count`, `_total_count`, and `_pagination_complete`. |
 | `get_object` | `object_id` (required) | One object record. |
 | `get_object_attributes` | `object_id` (required) | That object's attribute values. |
 | `get_object_history` | `object_id` (required) | Change-history response for that object. |
 | `get_connected_tickets` | `object_id` (required) | Jira tickets connected to that object. |
+| `get_object_reference_info` | `object_id` (required) | Counts of objects referencing that object, by object type and reference type. Not the objects themselves. |
 | `search_assets` | `question` (required); `max_results=25`, `fetch_all=false` | A structured plan translated to AQL, then object results or an exact count. See below. |
 | `create_object` **(write)** | `object_type_id`, `attributes` (both required) | Created object response. |
 | `update_object` **(write)** | `object_id`, `object_type_id`, `attributes` (all required) | Updated object response. |
