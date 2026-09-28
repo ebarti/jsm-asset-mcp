@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Refuse non-numeric object, object type, and schema IDs before interpolating them into Assets API paths, so a value such as `1/../../objectschema/2` or a query string cannot reach another route. The client also refuses any path that is not a plain `/segment/segment` route.
+
 ## 1.2.0
 
 Changes since v1.1.0:
