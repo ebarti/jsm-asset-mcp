@@ -95,9 +95,10 @@ class EnrichedSummaryTests(unittest.TestCase):
         client = WorkspaceClient()
         service = SchemaService(client, TTLCache())
         service.build_summary()
-        service._cache.set("schema_summary", None)  # force a second build from the lower caches
         before = len(client.calls)
-        service.build_summary()
+        with patch("jsm_asset_mcp.schema.time.monotonic", return_value=service._summary_built_at + 601):
+            service.build_summary()  # stale response schedules a refresh from the lower caches
+            service._refresh_thread.join(timeout=5)
         config_calls = [p for p, _ in client.calls[before:] if p.startswith("/config/")]
         self.assertEqual(config_calls, [])
 

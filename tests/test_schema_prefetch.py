@@ -4,6 +4,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
+import httpx
+
 from jsm_asset_mcp.cache import TTLCache
 from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.schema import SchemaService
@@ -20,12 +22,24 @@ class SummaryClient:
         self.release.set()
         self.fail = False
         self.closed = False
+        self.global_status_name = "Active"
+        self.denied: set[tuple[str, str | None]] = set()
+        self.denied_status = 403
 
     def get(self, path: str, params=None):
         self.release.wait(timeout=5)
         if self.fail:
             raise RuntimeError("Assets API unavailable")
         self.calls.append(path)
+        if (path, (params or {}).get("objectSchemaId")) in self.denied:
+            request = httpx.Request("GET", f"https://api.atlassian.com{path}")
+            httpx.Response(self.denied_status, request=request).raise_for_status()
+        if path == "/config/statustype":
+            schema_id = (params or {}).get("objectSchemaId")
+            return [{"name": "In Use" if schema_id else self.global_status_name}]
+        if path == "/config/referencetype":
+            schema_id = (params or {}).get("objectSchemaId")
+            return [{"name": "Installed" if schema_id else "Reference"}]
         if path == "/objectschema/list":
             values = [{"id": str(i), "name": name} for i, name in enumerate(self.names)]
             return {"startAt": 0, "total": len(values), "isLast": True, "values": values}
@@ -53,6 +67,8 @@ class SummaryPrefetchTests(unittest.TestCase):
         summary = service.build_summary()
         calls = len(client.calls)
         self.assertIn("## Schema: IT", summary)
+        self.assertIn('Global status types (all schemas): "Active"', summary)
+        self.assertIn('Reference types: "Installed"', summary)
         self.assertEqual(service.build_summary(), summary)
         self.assertEqual(len(client.calls), calls)  # no second crawl
 
@@ -74,6 +90,7 @@ class SummaryPrefetchTests(unittest.TestCase):
             original = service.build_summary()
 
         client.names.append("HR")
+        client.global_status_name = "Retired"
         service._cache.clear()  # the fetch cache expires with the summary
         with patch("jsm_asset_mcp.schema.time.monotonic", return_value=1061.0):
             stale = service.build_summary()
@@ -82,7 +99,9 @@ class SummaryPrefetchTests(unittest.TestCase):
 
         self.assertEqual(stale, original)
         self.assertNotIn("## Schema: HR", stale)
+        self.assertIn('Global status types (all schemas): "Active"', stale)
         self.assertIn("## Schema: HR", refreshed)
+        self.assertIn('Global status types (all schemas): "Retired"', refreshed)
 
     def test_failed_prefetch_is_logged_and_next_call_raises(self) -> None:
         client = SummaryClient()
@@ -106,7 +125,42 @@ class SummaryPrefetchTests(unittest.TestCase):
             with self.assertLogs("jsm_asset_mcp.schema", level="WARNING"):
                 self.assertEqual(service.build_summary(), good)
                 service._refresh_thread.join(timeout=5)
-            self.assertEqual(service.build_summary(), good)
+                self.assertEqual(service.build_summary(), good)
+                service._refresh_thread.join(timeout=5)
+
+    def test_prefetch_keeps_schema_context_when_config_scope_is_denied(self) -> None:
+        for denied, status in (
+            ({("/config/statustype", None), ("/config/referencetype", None)}, 401),
+            ({("/config/statustype", "0"), ("/config/referencetype", "0")}, 403),
+        ):
+            with self.subTest(denied=denied, status=status):
+                client = SummaryClient()
+                client.denied = denied
+                client.denied_status = status
+                service = self._service(client)
+                with self.assertLogs("jsm_asset_mcp.schema", level="WARNING") as logs:
+                    service.warm()
+                    service._refresh_thread.join(timeout=5)
+                summary = service.build_summary()
+                self.assertIn("## Schema: IT", summary)
+                self.assertTrue(any(str(status) in message and "read:cmdb-config:jira" in message for message in logs.output))
+                if ("/config/statustype", None) in denied:
+                    self.assertNotIn("Global status types", summary)
+                    self.assertIn('Status types: "In Use"', summary)
+                else:
+                    self.assertIn('Global status types (all schemas): "Active"', summary)
+                    self.assertNotIn('Status types: "In Use"', summary)
+
+    def test_required_schema_permission_error_is_not_masked_by_prefetch(self) -> None:
+        client = SummaryClient()
+        client.denied = {("/objectschema/list", None)}
+        service = self._service(client)
+        with self.assertLogs("jsm_asset_mcp.schema", level="WARNING"):
+            service.warm()
+            service._refresh_thread.join(timeout=5)
+        with self.assertRaises(httpx.HTTPStatusError) as caught:
+            service.build_summary()
+        self.assertEqual(caught.exception.response.status_code, 403)
 
 
 class PrefetchSettingsTests(unittest.TestCase):
