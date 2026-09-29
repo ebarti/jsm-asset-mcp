@@ -7,8 +7,15 @@ for natural-language → AQL translation.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
+
+import httpx
+
 from jsm_asset_mcp.cache import TTLCache
 from jsm_asset_mcp.client import AssetsClient
+
+logger = logging.getLogger(__name__)
 
 # Type-code → human-readable label mapping
 _TYPE_LABELS: dict[int, str] = {
@@ -154,6 +161,26 @@ class SchemaService:
         self._cache.set(cache_key, result)
         return result
 
+    def _optional_config_metadata(
+        self,
+        fetch: Callable[[str | None], list[dict]],
+        name: str,
+        schema_id: str | None = None,
+    ) -> list[dict]:
+        """Keep the required schema summary when config metadata is out of scope."""
+        try:
+            return fetch(schema_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {401, 403}:
+                raise
+            target = "global" if schema_id is None else f"schema {schema_id}"
+            logger.warning(
+                "Skipping %s enrichment for %s: Assets config API returned HTTP %s "
+                "(requires read:cmdb-config:jira).",
+                name, target, exc.response.status_code,
+            )
+            return []
+
     # ── High-level summary ───────────────────────────────────────────────
 
     def build_summary(self) -> str:
@@ -171,8 +198,8 @@ class SchemaService:
 
         # Exact status and reference-type names let the translator write
         # `Status = "In Use"` or `refType IN ("Installed")` instead of guessing.
-        global_statuses = self.fetch_status_types()
-        global_refs = self.fetch_reference_types()
+        global_statuses = self._optional_config_metadata(self.fetch_status_types, "status types")
+        global_refs = self._optional_config_metadata(self.fetch_reference_types, "reference types")
         if global_statuses:
             lines.append(f"Global status types (all schemas): {_names(global_statuses)}")
         if global_refs:
@@ -184,10 +211,10 @@ class SchemaService:
             schema_key = schema.get("objectSchemaKey", "N/A")
             lines.append(f"\n## Schema: {schema_name} (ID: {schema_id}, Key: {schema_key})")
 
-            statuses = self.fetch_status_types(schema_id)
+            statuses = self._optional_config_metadata(self.fetch_status_types, "status types", schema_id)
             if statuses:
                 lines.append(f"Status types: {_names(statuses)}")
-            refs = self.fetch_reference_types(schema_id)
+            refs = self._optional_config_metadata(self.fetch_reference_types, "reference types", schema_id)
             if refs:
                 lines.append(f"Reference types: {_names(refs)}")
 
