@@ -16,6 +16,17 @@ from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.schema import SchemaService
 
 
+def _json_size(payload: object) -> int:
+    return len(json.dumps(payload, separators=(",", ":"), default=str))
+
+
+def _attribute_identity(attribute: dict) -> object:
+    return attribute.get("globalId") or (
+        (attribute.get("workspaceId"), attribute.get("id"))
+        if attribute.get("id") is not None else json.dumps(attribute, sort_keys=True)
+    )
+
+
 _NUMERIC_ID_RE = re.compile(r"^[0-9]+$")
 
 
@@ -105,10 +116,13 @@ class Toolset:
             include_attributes: Include object attributes in response (default: True).
             fetch_all: When true, paginate until all matching objects are returned.
         """
+        self._check_paging(start_at, max_results)
         if fetch_all:
             return self._fetch_all_aql(query, start_at, max_results, include_attributes)
 
-        return self._fetch_aql_page(query, start_at, max_results, include_attributes)
+        page = self._fetch_aql_page(query, start_at, max_results, include_attributes)
+        self._check_result_size(_json_size(page), len(page.get("values", [])))
+        return page
 
     def get_object(self, object_id: str) -> dict:
         """Retrieve a single asset object by its ID.
@@ -331,6 +345,24 @@ class Toolset:
             raise ValueError("Assets total-count response did not contain an integer totalCount.")
         return total_count
 
+    def _check_paging(self, start_at: int, max_results: int) -> None:
+        cap = self.deps.settings.fetch_all_max_objects
+        if start_at < 0:
+            raise ValueError(f"start_at must be 0 or more; got {start_at}.")
+        if not 1 <= max_results <= cap:
+            raise ValueError(
+                f"max_results must be between 1 and {cap} (JSM_FETCH_ALL_MAX_OBJECTS); got {max_results}."
+            )
+
+    def _check_result_size(self, size: int, returned: int) -> None:
+        limit = self.deps.settings.max_result_bytes
+        if size > limit:
+            raise ValueError(
+                f"The AQL result reached {size} bytes after {returned} objects, above the "
+                f"{limit}-byte limit (JSM_MAX_RESULT_BYTES). Narrow the query, set "
+                "include_attributes=false, lower max_results, or ask for a count instead."
+            )
+
     def _fetch_all_aql(
         self,
         query: str,
@@ -345,22 +377,85 @@ class Toolset:
         if expected_total is None:
             expected_total = self._fetch_aql_total_count(query)
 
+        # Refuse before paginating: the total count is already known, so an
+        # oversized "all" request costs one call instead of hundreds.
+        cap = self.deps.settings.fetch_all_max_objects
+        remaining = max(expected_total - start_at, 0)
+        if remaining > cap:
+            raise ValueError(
+                f"The query matches {remaining} objects from start_at={start_at}, more than the "
+                f"fetch_all limit of {cap} (JSM_FETCH_ALL_MAX_OBJECTS). Narrow the AQL, ask for "
+                "a count, or page explicitly with start_at and max_results."
+            )
+        # Even an underfilled page can be valid. With real forward progress,
+        # there can be at most one nonempty page per remaining object.
+        max_pages = remaining + 1
+        merged_values: list[dict] = []
+        merged_attributes: list[dict] = []
+        seen_attributes: set[object] = set()
+        seen_page_values: set[str] = set()
+        has_attributes = False
+
         while True:
+            if len(pages) >= max_pages:
+                raise ValueError(
+                    f"fetch_all stopped after {len(pages)} pages without reaching the reported "
+                    f"total of {expected_total}; the Assets API pagination looks inconsistent."
+                )
             page = self._fetch_aql_page(query, next_start, max_results, include_attributes)
-            pages.append(page)
-
+            try:
+                page_start = int(page.get("startAt", next_start))
+            except (TypeError, ValueError):
+                raise ValueError("Assets AQL pagination looks inconsistent: invalid startAt.") from None
+            if page_start != next_start:
+                raise ValueError(
+                    f"Assets AQL pagination looks inconsistent: requested startAt={next_start}, "
+                    f"received startAt={page_start}."
+                )
             values = page.get("values", [])
-            if _is_last_page(page):
-                break
-            if not values:
-                break
+            if values:
+                signature = json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
+                if signature in seen_page_values:
+                    raise ValueError("Assets AQL pagination looks inconsistent: repeated page values.")
+                seen_page_values.add(signature)
+            merged_values.extend(values)
+            if len(merged_values) > cap:
+                raise ValueError(
+                    f"Assets returned {len(merged_values)} objects, above the fetch_all limit of "
+                    f"{cap} (JSM_FETCH_ALL_MAX_OBJECTS)."
+                )
+            if "objectTypeAttributes" in page:
+                has_attributes = True
+                unique_attributes = []
+                for attribute in page["objectTypeAttributes"]:
+                    identity = _attribute_identity(attribute)
+                    if identity not in seen_attributes:
+                        seen_attributes.add(identity)
+                        unique_attributes.append(attribute)
+                        merged_attributes.append(attribute)
+                # Keep only definitions that can appear in the merged result.
+                page = {**page, "objectTypeAttributes": unique_attributes}
+            pages.append(page)
+            # This is a lower bound on the returned JSON, so it can stop an
+            # oversized crawl early without rejecting repeated page metadata.
+            lower_bound = {"values": merged_values}
+            if has_attributes:
+                lower_bound["objectTypeAttributes"] = merged_attributes
+            self._check_result_size(_json_size(lower_bound), len(merged_values))
 
-            page_start = int(page.get("startAt", next_start))
             next_start = page_start + len(values)
-            if next_start >= expected_total:
+            if _is_last_page(page) or not values or next_start >= expected_total:
                 break
 
-        return self._merge_aql_pages(pages, max_results, expected_total)
+        if len(merged_values) != remaining:
+            raise ValueError(
+                f"fetch_all returned {len(merged_values)} of {remaining} expected objects "
+                f"from start_at={start_at} (totalCount={expected_total}); "
+                "pagination looks inconsistent."
+            )
+        result = self._merge_aql_pages(pages, max_results, expected_total)
+        self._check_result_size(_json_size(result), len(result.get("values", [])))
+        return result
 
     def _merge_aql_pages(
         self,
@@ -388,17 +483,13 @@ class Toolset:
         for page in pages:
             values.extend(page.get("values", []))
             for attribute in page.get("objectTypeAttributes", []):
-                identity = attribute.get("globalId") or (
-                    (attribute.get("workspaceId"), attribute.get("id"))
-                    if attribute.get("id") is not None else json.dumps(attribute, sort_keys=True)
-                )
+                identity = _attribute_identity(attribute)
                 if identity not in seen_attributes:
                     seen_attributes.add(identity)
                     attributes.append(attribute)
 
         total = total_count if total_count is not None else len(values)
-        complete = _is_last_page(pages[-1])
-        complete = complete or len(values) >= total
+        complete = int(pages[0].get("startAt", 0)) + len(values) >= total
 
         result["startAt"] = pages[0].get("startAt", 0)
         result["maxResults"] = len(values)
@@ -450,6 +541,8 @@ class Toolset:
         """
         plan = self._translate_question(question)
         page_size = plan.max_results or max_results
+        if plan.result_type != "count":
+            self._check_paging(0, page_size)
         total_count = self._fetch_aql_total_count(plan.aql)
 
         if plan.result_type == "count":
@@ -484,6 +577,7 @@ class Toolset:
         result["_llm_max_results"] = plan.max_results
         result["_llm_fetch_all"] = plan.fetch_all
         result["_result_type"] = plan.result_type
+        self._check_result_size(_json_size(result), len(result.get("values", [])))
         return result
 
     # ── Related data ─────────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Bound AQL results returned to the host. `fetch_all` is refused after the total-count call, before any page request, when more than `JSM_FETCH_ALL_MAX_OBJECTS` objects (default 500) match; `max_results`, including one chosen by the translator, is capped at the same value; final merged/deduplicated JSON, including search metadata, is limited by `JSM_MAX_RESULT_BYTES` (default 1 MiB); and pagination accepts advancing underfilled pages while rejecting repeated pages or totals contradicted by a terminal page. Count quantities are not limited by the object cap.
 - Build the schema summary in a background thread at startup when Jira credentials are configured, so the first `search_assets` does not pay for the schema crawl; `JSM_SCHEMA_PREFETCH=false` turns this off. Once expired, the previous summary is served while a background refresh runs.
 - Make the schema cache lifetime configurable with `JSM_SCHEMA_CACHE_TTL` (seconds, default 600).
 - Add `get_object_reference_info` (inbound reference counts by object type and reference type, for impact analysis), `list_status_types`, `list_reference_types`, and `get_usage`.

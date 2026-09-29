@@ -32,16 +32,16 @@ def _parse_bool(name: str, raw: str | None, default: bool) -> bool:
     raise ValueError(f"{name} must be one of {sorted(_TRUE_VALUES | _FALSE_VALUES)}, got {raw!r}.")
 
 
-def _parse_positive_int(name: str, raw: str | None, default: int) -> int:
+def _parse_positive_int(name: str, raw: str | None, default: int, unit: str = " (seconds)") -> int:
     value = (raw or "").strip()
     if not value:
         return default
     try:
         parsed = int(value)
     except ValueError:
-        raise ValueError(f"{name} must be a positive integer (seconds), got {raw!r}.") from None
+        raise ValueError(f"{name} must be a positive integer{unit}, got {raw!r}.") from None
     if parsed <= 0:
-        raise ValueError(f"{name} must be a positive integer (seconds), got {raw!r}.")
+        raise ValueError(f"{name} must be a positive integer{unit}, got {raw!r}.")
     return parsed
 
 
@@ -103,6 +103,12 @@ class Settings:
     jira_api_token: str = ""
     jira_workspace_id: str = ""
     jira_cloud_id: str = ""
+
+    # Bounds on what an AQL call may return to the host. An object with its
+    # attributes is typically 5-15 KiB of JSON, so the byte cap usually
+    # applies first; the object cap refuses oversized fetch_all up front.
+    fetch_all_max_objects: int = 500
+    max_result_bytes: int = 1_048_576
 
     # Schema metadata cache lifetime, and whether to build the schema
     # summary in the background as soon as the server starts.
@@ -172,6 +178,12 @@ class Settings:
             jira_api_token=os.environ.get("JIRA_API_TOKEN", ""),
             jira_workspace_id=jira_workspace_id,
             jira_cloud_id=jira_cloud_id,
+            fetch_all_max_objects=_parse_positive_int(
+                "JSM_FETCH_ALL_MAX_OBJECTS", os.environ.get("JSM_FETCH_ALL_MAX_OBJECTS"), 500, ""
+            ),
+            max_result_bytes=_parse_positive_int(
+                "JSM_MAX_RESULT_BYTES", os.environ.get("JSM_MAX_RESULT_BYTES"), 1_048_576, ""
+            ),
             schema_cache_ttl=_parse_positive_int(
                 "JSM_SCHEMA_CACHE_TTL", os.environ.get("JSM_SCHEMA_CACHE_TTL"), 600
             ),
