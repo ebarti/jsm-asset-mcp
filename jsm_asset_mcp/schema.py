@@ -3,29 +3,55 @@
 Fetches object schemas, object types, and attribute definitions from the
 JSM Assets API and assembles them into a text summary used as LLM context
 for natural-language → AQL translation.
+
+Building the summary costs one API call per object type, which can take
+about a minute on a large workspace, so it can be prefetched in the
+background at startup (:meth:`SchemaService.warm`) and, once expired, is
+served stale while a background refresh runs.
 """
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
+from collections.abc import Callable
+
+import httpx
+
 from jsm_asset_mcp.cache import TTLCache
 from jsm_asset_mcp.client import AssetsClient
+
+logger = logging.getLogger(__name__)
 
 # Type-code → human-readable label mapping
 _TYPE_LABELS: dict[int, str] = {
     0: "Default",
     1: "Object Reference",
     2: "User",
+    3: "Confluence",
     4: "Group",
+    5: "Version",
+    6: "Project",
     7: "Status",
 }
+
+
+def _names(items: list[dict]) -> str:
+    return ", ".join(f'"{item.get("name", "?")}"' for item in items)
 
 
 class SchemaService:
     """Cacheable schema introspection backed by an :class:`AssetsClient`."""
 
-    def __init__(self, client: AssetsClient, cache: TTLCache) -> None:
+    def __init__(self, client: AssetsClient, cache: TTLCache, summary_ttl: float = 600) -> None:
         self._client = client
         self._cache = cache
+        self._summary_ttl = summary_ttl
+        self._summary: str | None = None
+        self._summary_built_at = 0.0
+        self._lock = threading.Lock()
+        self._refresh_thread: threading.Thread | None = None
 
     # ── Low-level fetchers (cached) ──────────────────────────────────────
 
@@ -123,26 +149,139 @@ class SchemaService:
         self._cache.set(cache_key, result)
         return result
 
+    def fetch_status_types(self, schema_id: str | None = None) -> list[dict]:
+        """Return status types: global ones when *schema_id* is ``None``,
+        otherwise only those defined in that schema."""
+        cache_key = f"statustypes_{schema_id or 'global'}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        params = {"objectSchemaId": schema_id} if schema_id else None
+        result = self._client.get("/config/statustype", params=params)
+        self._cache.set(cache_key, result)
+        return result
+
+    def fetch_reference_types(self, schema_id: str | None = None) -> list[dict]:
+        """Return reference types: global ones when *schema_id* is ``None``,
+        otherwise only those defined in that schema."""
+        cache_key = f"referencetypes_{schema_id or 'global'}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        params = {"objectSchemaId": schema_id} if schema_id else None
+        result = self._client.get("/config/referencetype", params=params)
+        self._cache.set(cache_key, result)
+        return result
+
+    def _optional_config_metadata(
+        self,
+        fetch: Callable[[str | None], list[dict]],
+        name: str,
+        schema_id: str | None = None,
+    ) -> list[dict]:
+        """Keep the required schema summary when config metadata is out of scope."""
+        try:
+            return fetch(schema_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {401, 403}:
+                raise
+            target = "global" if schema_id is None else f"schema {schema_id}"
+            logger.warning(
+                "Skipping %s enrichment for %s: Assets config API returned HTTP %s "
+                "(requires read:cmdb-config:jira).",
+                name, target, exc.response.status_code,
+            )
+            return []
+
     # ── High-level summary ───────────────────────────────────────────────
 
     def build_summary(self) -> str:
-        """Build a human-readable summary of the full Assets schema.
+        """Return the human-readable summary of the full Assets schema.
 
         The output is designed to be injected into an LLM prompt so it can
         reason about available object types and attributes when generating
         AQL queries.
-        """
-        cached = self._cache.get("schema_summary")
-        if cached is not None:
-            return cached
 
+        A fresh summary is returned as is. An expired one is still returned,
+        and a background refresh is started. With no summary yet, the call
+        waits for an in-flight prefetch, or builds synchronously.
+        """
+        with self._lock:
+            if self._summary is not None:
+                if time.monotonic() - self._summary_built_at >= self._summary_ttl:
+                    self._start_refresh_locked()
+                return self._summary
+            thread = self._refresh_thread
+
+        if thread is not None:
+            thread.join()
+            with self._lock:
+                if self._summary is not None:
+                    return self._summary
+
+        # No summary and no prefetch, or the prefetch failed: build now so
+        # the error, if any, reaches the caller.
+        return self._refresh()
+
+    def warm(self) -> None:
+        """Start building the summary in the background, without blocking."""
+        with self._lock:
+            self._start_refresh_locked()
+
+    def _start_refresh_locked(self) -> None:
+        if self._refresh_thread is not None and self._refresh_thread.is_alive():
+            return
+        self._refresh_thread = threading.Thread(
+            target=self._refresh_in_background,
+            name="schema-summary-refresh",
+            daemon=True,
+        )
+        self._refresh_thread.start()
+
+    def _refresh_in_background(self) -> None:
+        started = time.monotonic()
+        try:
+            summary = self._refresh()
+        except Exception:
+            logger.warning("Background schema summary refresh failed.", exc_info=True)
+            return
+        logger.info(
+            "Schema summary ready: %d characters in %.1fs.",
+            len(summary),
+            time.monotonic() - started,
+        )
+
+    def _refresh(self) -> str:
+        summary = self._compute_summary()
+        with self._lock:
+            self._summary = summary
+            self._summary_built_at = time.monotonic()
+        return summary
+
+    def _compute_summary(self) -> str:
         lines: list[str] = []
+
+        # Exact status and reference-type names let the translator write
+        # `Status = "In Use"` or `refType IN ("Installed")` instead of guessing.
+        global_statuses = self._optional_config_metadata(self.fetch_status_types, "status types")
+        global_refs = self._optional_config_metadata(self.fetch_reference_types, "reference types")
+        if global_statuses:
+            lines.append(f"Global status types (all schemas): {_names(global_statuses)}")
+        if global_refs:
+            lines.append(f"Global reference types (all schemas): {_names(global_refs)}")
 
         for schema in self.fetch_all_schemas():
             schema_id = schema["id"]
             schema_name = schema.get("name", "Unknown")
             schema_key = schema.get("objectSchemaKey", "N/A")
             lines.append(f"\n## Schema: {schema_name} (ID: {schema_id}, Key: {schema_key})")
+
+            statuses = self._optional_config_metadata(self.fetch_status_types, "status types", schema_id)
+            if statuses:
+                lines.append(f"Status types: {_names(statuses)}")
+            refs = self._optional_config_metadata(self.fetch_reference_types, "reference types", schema_id)
+            if refs:
+                lines.append(f"Reference types: {_names(refs)}")
 
             for ot in self.fetch_object_types(schema_id):
                 ot_id = ot["id"]
@@ -160,9 +299,10 @@ class SchemaService:
                     type_label = _TYPE_LABELS.get(attr_type, f"Type({attr_type})")
                     if dt_name:
                         type_label = f"{type_label}/{dt_name}"
+                    target = (attr.get("referenceObjectType") or {}).get("name")
+                    if target:
+                        type_label = f"{type_label} -> {target}"
 
                     lines.append(f"  - {attr_name}: {type_label}")
 
-        summary = "\n".join(lines)
-        self._cache.set("schema_summary", summary)
-        return summary
+        return "\n".join(lines)

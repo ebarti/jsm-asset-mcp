@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -10,6 +11,16 @@ from jsm_asset_mcp.config import Settings
 
 _HEADERS = {"Accept": "application/json"}
 _TIMEOUT = 30
+# Every path this client sends is an Assets API route built by this package.
+# Refusing anything else keeps a crafted ID from reaching another route or
+# smuggling a query string; the tools also validate their IDs.
+_PATH_RE = re.compile(r"^/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
+
+
+def _checked(path: str) -> str:
+    if not _PATH_RE.fullmatch(path):
+        raise ValueError(f"Refusing unexpected Assets API path {path!r}.")
+    return path
 
 
 class AssetsClient:
@@ -56,6 +67,7 @@ class AssetsClient:
 
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """``GET {base_url}{path}``."""
+        path = _checked(path)
         response = self._http.get(
             f"{self.base_url}{path}",
             auth=self._settings.auth,
@@ -71,6 +83,7 @@ class AssetsClient:
         params: dict[str, Any] | None = None,
     ) -> Any:
         """``POST {base_url}{path}``."""
+        path = _checked(path)
         response = self._http.post(
             f"{self.base_url}{path}",
             auth=self._settings.auth,
@@ -82,6 +95,7 @@ class AssetsClient:
 
     def put(self, path: str, payload: dict[str, Any]) -> Any:
         """``PUT {base_url}{path}``."""
+        path = _checked(path)
         response = self._http.put(
             f"{self.base_url}{path}",
             auth=self._settings.auth,
@@ -92,6 +106,7 @@ class AssetsClient:
 
     def delete(self, path: str) -> Any:
         """``DELETE {base_url}{path}``."""
+        path = _checked(path)
         response = self._http.delete(
             f"{self.base_url}{path}",
             auth=self._settings.auth,

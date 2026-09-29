@@ -7,6 +7,7 @@ server instances isolated by carrying their dependencies explicitly.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from jsm_asset_mcp import llm
@@ -17,6 +18,20 @@ from jsm_asset_mcp.schema import SchemaService
 
 def _json_size(payload: object) -> int:
     return len(json.dumps(payload, separators=(",", ":"), default=str))
+
+
+_NUMERIC_ID_RE = re.compile(r"^[0-9]+$")
+
+
+def _numeric_id(name: str, value: object) -> str:
+    """Return *value* if it is a numeric Assets ID, else raise.
+
+    IDs come from the model and are interpolated into API paths, so a value
+    such as "1/../../objectschema/2" must not reach the client.
+    """
+    if not isinstance(value, str) or not _NUMERIC_ID_RE.fullmatch(value):
+        raise ValueError(f'{name} must be a numeric Assets ID such as "123"; got {value!r}.')
+    return value
 
 
 def _is_last_page(result: dict) -> bool:
@@ -42,25 +57,38 @@ class Toolset:
     """Per-server collection of bound MCP tool callables."""
 
     deps: Dependencies
+    read_tools: list = field(init=False, repr=False)
+    write_tools: list = field(init=False, repr=False)
     all_tools: list = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.all_tools = [
+        self.read_tools = [
             self.execute_aql,
             self.get_object,
             self.get_object_attributes,
-            self.create_object,
-            self.update_object,
-            self.delete_object,
+            self.get_object_reference_info,
             self.list_object_schemas,
             self.get_object_schema,
             self.list_object_types,
             self.get_object_type_attributes,
             self.get_schema_summary,
+            self.list_status_types,
+            self.list_reference_types,
+            self.get_usage,
             self.search_assets,
             self.get_object_history,
             self.get_connected_tickets,
         ]
+        self.write_tools = [
+            self.create_object,
+            self.update_object,
+            self.delete_object,
+        ]
+        # In read-only mode the write tools are never registered, so a client
+        # cannot call them even if its own permission rules would allow it.
+        self.all_tools = list(self.read_tools)
+        if not self.deps.settings.read_only:
+            self.all_tools.extend(self.write_tools)
 
     # ── Core CRUD ────────────────────────────────────────────────────────
 
@@ -95,7 +123,7 @@ class Toolset:
         Args:
             object_id: The unique identifier of the asset object.
         """
-        return self.deps.client.get(f"/object/{object_id}")
+        return self.deps.client.get(f"/object/{_numeric_id('object_id', object_id)}")
 
     def get_object_attributes(self, object_id: str) -> dict:
         """Retrieve all attributes of a specific object.
@@ -103,10 +131,42 @@ class Toolset:
         Args:
             object_id: The unique identifier of the asset object.
         """
-        return self.deps.client.get(f"/object/{object_id}/attributes")
+        return self.deps.client.get(f"/object/{_numeric_id('object_id', object_id)}/attributes")
+
+    def _schema_of(self, resource: dict, what: str) -> str:
+        schema_id = resource.get("objectSchemaId")
+        if schema_id in (None, ""):
+            # Fail closed: an unknown schema can never match the allow-list.
+            raise PermissionError(f"Write refused: could not determine the object schema of {what}.")
+        return str(schema_id)
+
+    def _require_writable(self, schema_id: str, what: str) -> None:
+        settings = self.deps.settings
+        if settings.write_all_schemas or schema_id in settings.write_schema_ids:
+            return
+        raise PermissionError(
+            f"Write refused: {what} belongs to object schema {schema_id}, which is not in "
+            f"JSM_WRITE_SCHEMA_IDS (writes allowed on {settings.write_scope})."
+        )
+
+    def _check_object_type_writable(self, object_type_id: str) -> None:
+        if self.deps.settings.write_all_schemas:
+            return
+        object_type = self.deps.client.get(f"/objecttype/{object_type_id}")
+        what = f"object type {object_type_id}"
+        self._require_writable(self._schema_of(object_type, what), what)
+
+    def _check_object_writable(self, object_id: str) -> None:
+        if self.deps.settings.write_all_schemas:
+            return
+        obj = self.deps.client.get(f"/object/{object_id}")
+        what = f"object {obj.get('objectKey') or object_id}"
+        self._require_writable(self._schema_of(obj.get("objectType") or {}, what), what)
 
     def create_object(self, object_type_id: str, attributes: list[dict]) -> dict:
         """Create a new object in JSM Assets.
+
+        When JSM_WRITE_SCHEMA_IDS is set, only allowed in the listed object schemas.
 
         Args:
             object_type_id: The ID of the object type to create.
@@ -114,6 +174,8 @@ class Toolset:
                         'objectAttributeValues' (array with 'value' key).
                         Example: [{"objectTypeAttributeId": "123", "objectAttributeValues": [{"value": "My Server"}]}]
         """
+        object_type_id = _numeric_id("object_type_id", object_type_id)
+        self._check_object_type_writable(object_type_id)
         return self.deps.client.post("/object/create", payload={
             "objectTypeId": object_type_id,
             "attributes": attributes,
@@ -122,12 +184,19 @@ class Toolset:
     def update_object(self, object_id: str, object_type_id: str, attributes: list[dict]) -> dict:
         """Update an existing object in JSM Assets.
 
+        When JSM_WRITE_SCHEMA_IDS is set, only allowed in the listed object schemas.
+
         Args:
             object_id: The ID of the object to update.
             object_type_id: The ID of the object type.
             attributes: Array of attribute objects to update. Each must have 'objectTypeAttributeId' and
                         'objectAttributeValues' (array with 'value' key).
         """
+        object_id = _numeric_id("object_id", object_id)
+        object_type_id = _numeric_id("object_type_id", object_type_id)
+        # Both: the object's current schema and the type it is written as.
+        self._check_object_writable(object_id)
+        self._check_object_type_writable(object_type_id)
         return self.deps.client.put(f"/object/{object_id}", payload={
             "objectTypeId": object_type_id,
             "attributes": attributes,
@@ -136,10 +205,29 @@ class Toolset:
     def delete_object(self, object_id: str) -> dict:
         """Delete an object from JSM Assets.
 
+        When JSM_WRITE_SCHEMA_IDS is set, only allowed in the listed object schemas.
+
         Args:
             object_id: The ID of the object to delete.
         """
+        object_id = _numeric_id("object_id", object_id)
+        self._check_object_writable(object_id)
         return self.deps.client.delete(f"/object/{object_id}")
+
+    def get_object_reference_info(self, object_id: str) -> list[dict]:
+        """Summarise the objects that reference a given object (inbound
+        references), grouped by object type and reference type. Useful for
+        impact analysis ("what depends on this server?").
+
+        Returns counts, not the objects themselves. To list them, run
+        execute_aql with e.g. `object HAVING outboundReferences(Key = "ITSM-123")`
+        (objects pointing to ITSM-123), or `object HAVING
+        inboundReferences(Key = "ITSM-123")` (objects ITSM-123 points to).
+
+        Args:
+            object_id: The unique identifier of the asset object.
+        """
+        return self.deps.client.get(f"/object/{_numeric_id('object_id', object_id)}/referenceinfo")
 
     # ── Schema introspection ────────────────────────────────────────────
 
@@ -153,7 +241,7 @@ class Toolset:
         Args:
             schema_id: The ID of the object schema.
         """
-        return self.deps.client.get(f"/objectschema/{schema_id}")
+        return self.deps.client.get(f"/objectschema/{_numeric_id('schema_id', schema_id)}")
 
     def list_object_types(self, schema_id: str) -> list[dict]:
         """List all object types in a schema (flat list).
@@ -161,7 +249,7 @@ class Toolset:
         Args:
             schema_id: The ID of the object schema.
         """
-        return self.deps.client.get(f"/objectschema/{schema_id}/objecttypes/flat")
+        return self.deps.client.get(f"/objectschema/{_numeric_id('schema_id', schema_id)}/objecttypes/flat")
 
     def get_object_type_attributes(self, object_type_id: str) -> list[dict]:
         """Get all attribute definitions for an object type. Useful for understanding what
@@ -170,7 +258,51 @@ class Toolset:
         Args:
             object_type_id: The ID of the object type.
         """
-        return self.deps.client.get(f"/objecttype/{object_type_id}/attributes")
+        return self.deps.client.get(f"/objecttype/{_numeric_id('object_type_id', object_type_id)}/attributes")
+
+    def list_status_types(self, schema_id: str = "") -> list[dict]:
+        """List status types, i.e. the valid values of Status attributes.
+
+        Use the exact names in AQL, e.g. `Status = "In Use"`.
+
+        Args:
+            schema_id: Optional object schema ID. Empty returns only global
+                status types; a schema ID returns global plus that schema's own.
+        """
+        if schema_id:
+            schema_id = _numeric_id("schema_id", schema_id)
+        statuses = self.deps.client.get("/config/statustype")
+        if schema_id:
+            statuses = statuses + self.deps.client.get(
+                "/config/statustype", params={"objectSchemaId": schema_id}
+            )
+        return statuses
+
+    def list_reference_types(self, schema_id: str = "") -> list[dict]:
+        """List reference types, i.e. the labels of links between objects
+        (e.g. "Installed", "Depends").
+
+        Use the exact names in AQL reference functions, e.g.
+        `object HAVING outR(objectType = "Host", refType IN ("Installed"))`.
+
+        Args:
+            schema_id: Optional object schema ID. Empty returns only global
+                reference types; a schema ID returns global plus that schema's own.
+        """
+        if schema_id:
+            schema_id = _numeric_id("schema_id", schema_id)
+        if not schema_id:
+            return self.deps.client.get("/config/referencetype")
+        return self.deps.client.get(
+            "/config/referencetype",
+            params={"objectSchemaId": schema_id, "includeAll": "true"},
+        )
+
+    def get_usage(self) -> dict:
+        """Get the total number of objects in the workspace and the object
+        count per schema. Useful for inventory overviews and licence tracking.
+        """
+        return self.deps.client.get("/usage")
 
     def get_schema_summary(self) -> str:
         """Get a human-readable summary of all object schemas, object types, and their
@@ -413,7 +545,7 @@ class Toolset:
         Args:
             object_id: The unique identifier of the asset object.
         """
-        return self.deps.client.get(f"/object/{object_id}/history")
+        return self.deps.client.get(f"/object/{_numeric_id('object_id', object_id)}/history")
 
     def get_connected_tickets(self, object_id: str) -> dict:
         """Get Jira tickets connected to an asset object.
@@ -421,4 +553,4 @@ class Toolset:
         Args:
             object_id: The unique identifier of the asset object.
         """
-        return self.deps.client.get(f"/objectconnectedtickets/{object_id}/tickets")
+        return self.deps.client.get(f"/objectconnectedtickets/{_numeric_id('object_id', object_id)}/tickets")

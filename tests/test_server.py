@@ -30,9 +30,14 @@ class FakeClient:
 
 
 class FakeSchemaService:
-    def __init__(self, client: FakeClient, cache) -> None:
+    def __init__(self, client: FakeClient, cache, summary_ttl: float = 600) -> None:
         self.client = client
         self.cache = cache
+        self.summary_ttl = summary_ttl
+        self.warm_calls = 0
+
+    def warm(self) -> None:
+        self.warm_calls += 1
 
     def build_summary(self) -> str:
         return f"schema:{self.client.tag}"
@@ -103,7 +108,8 @@ class CreateServerTests(unittest.IsolatedAsyncioTestCase):
         try:
             with patch("jsm_asset_mcp.client.httpx.Client", side_effect=client_factory):
                 server = create_server(Settings(
-                    jira_cloud_id="cloud-123", jira_workspace_id="workspace-123",
+                    jira_cloud_id="11111111-2222-3333-4444-555555555555",
+                    jira_workspace_id="66666666-7777-8888-9999-aaaaaaaaaaaa",
                     jira_email="user@example.com", jira_api_token="test-token",
                 ))
                 result = await server.call_tool("list_object_schemas", {})
@@ -147,7 +153,8 @@ class CreateServerTests(unittest.IsolatedAsyncioTestCase):
         try:
             with patch("jsm_asset_mcp.client.httpx.Client", side_effect=client_factory):
                 server = create_server(Settings(
-                    jira_cloud_id="cloud-123", jira_workspace_id="workspace-123",
+                    jira_cloud_id="11111111-2222-3333-4444-555555555555",
+                    jira_workspace_id="66666666-7777-8888-9999-aaaaaaaaaaaa",
                     jira_email="user@example.com", jira_api_token="test-token",
                 ))
                 result = await server.call_tool("execute_aql", {
