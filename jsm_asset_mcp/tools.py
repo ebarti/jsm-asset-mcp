@@ -387,11 +387,13 @@ class Toolset:
                 f"fetch_all limit of {cap} (JSM_FETCH_ALL_MAX_OBJECTS). Narrow the AQL, ask for "
                 "a count, or page explicitly with start_at and max_results."
             )
-        # Guard against an API whose totals and pages disagree.
-        max_pages = -(-cap // max_results) + 1
+        # Even an underfilled page can be valid. With real forward progress,
+        # there can be at most one nonempty page per remaining object.
+        max_pages = remaining + 1
         merged_values: list[dict] = []
         merged_attributes: list[dict] = []
         seen_attributes: set[object] = set()
+        seen_page_values: set[str] = set()
         has_attributes = False
 
         while True:
@@ -401,7 +403,21 @@ class Toolset:
                     f"total of {expected_total}; the Assets API pagination looks inconsistent."
                 )
             page = self._fetch_aql_page(query, next_start, max_results, include_attributes)
+            try:
+                page_start = int(page.get("startAt", next_start))
+            except (TypeError, ValueError):
+                raise ValueError("Assets AQL pagination looks inconsistent: invalid startAt.") from None
+            if page_start != next_start:
+                raise ValueError(
+                    f"Assets AQL pagination looks inconsistent: requested startAt={next_start}, "
+                    f"received startAt={page_start}."
+                )
             values = page.get("values", [])
+            if values:
+                signature = json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
+                if signature in seen_page_values:
+                    raise ValueError("Assets AQL pagination looks inconsistent: repeated page values.")
+                seen_page_values.add(signature)
             merged_values.extend(values)
             if len(merged_values) > cap:
                 raise ValueError(
@@ -427,16 +443,16 @@ class Toolset:
                 lower_bound["objectTypeAttributes"] = merged_attributes
             self._check_result_size(_json_size(lower_bound), len(merged_values))
 
-            if _is_last_page(page):
-                break
-            if not values:
-                break
-
-            page_start = int(page.get("startAt", next_start))
             next_start = page_start + len(values)
-            if next_start >= expected_total:
+            if _is_last_page(page) or not values or next_start >= expected_total:
                 break
 
+        if len(merged_values) != remaining:
+            raise ValueError(
+                f"fetch_all returned {len(merged_values)} of {remaining} expected objects "
+                f"from start_at={start_at} (totalCount={expected_total}); "
+                "pagination looks inconsistent."
+            )
         result = self._merge_aql_pages(pages, max_results, expected_total)
         self._check_result_size(_json_size(result), len(result.get("values", [])))
         return result
@@ -473,8 +489,7 @@ class Toolset:
                     attributes.append(attribute)
 
         total = total_count if total_count is not None else len(values)
-        complete = _is_last_page(pages[-1])
-        complete = complete or len(values) >= total
+        complete = int(pages[0].get("startAt", 0)) + len(values) >= total
 
         result["startAt"] = pages[0].get("startAt", 0)
         result["maxResults"] = len(values)

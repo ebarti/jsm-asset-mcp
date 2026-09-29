@@ -41,6 +41,39 @@ class RepeatedMetadataClient(AqlClient):
         return result
 
 
+class UnderfilledClient(AqlClient):
+    """Returns one object per advancing page regardless of requested page size."""
+
+    def __init__(self, total: int, terminal_flag: bool = True, repeat_value: bool = False) -> None:
+        super().__init__(total=total, blob=0)
+        self.offsets: list[int] = []
+        self.terminal_flag = terminal_flag
+        self.repeat_value = repeat_value
+
+    def post(self, path, payload=None, params=None):
+        self.requests.append(path)
+        if path == "/object/aql/totalcount":
+            return {"totalCount": self.total}
+        offset = params["startAt"]
+        self.offsets.append(offset)
+        return {
+            "startAt": offset,
+            "values": [{"id": "0" if self.repeat_value else str(offset)}],
+            "isLast": self.terminal_flag and offset == self.total - 1,
+        }
+
+
+class PrematureLastClient(AqlClient):
+    def __init__(self) -> None:
+        super().__init__(total=12)
+
+    def post(self, path, payload=None, params=None):
+        self.requests.append(path)
+        if path == "/object/aql/totalcount":
+            return {"totalCount": 12}
+        return {"startAt": 0, "values": [{"id": str(i)} for i in range(5)], "isLast": True}
+
+
 class StaticSchema:
     def build_summary(self) -> str:
         return "Object type: Laptop"
@@ -116,6 +149,37 @@ class FetchAllLimitTests(unittest.TestCase):
             _tools(client).execute_aql("q", max_results=250, fetch_all=True)
         self.assertLessEqual(client.requests.count("/object/aql"), 3)
 
+    def test_advancing_underfilled_pages_reach_true_end_at_object_cap(self) -> None:
+        client = UnderfilledClient(total=10)
+        result = _tools(client, fetch_all_max_objects=10).execute_aql(
+            "q", max_results=10, fetch_all=True
+        )
+        self.assertEqual(client.offsets, list(range(10)))
+        self.assertEqual([value["id"] for value in result["values"]], [str(i) for i in range(10)])
+        self.assertEqual((result["total"], result["_returned_count"], result["_page_count"]), (10, 10, 10))
+        self.assertTrue(result["_pagination_complete"])
+
+    def test_offset_reaching_total_is_complete_without_last_flag(self) -> None:
+        client = UnderfilledClient(total=12, terminal_flag=False)
+        result = _tools(client, fetch_all_max_objects=10).execute_aql(
+            "q", start_at=2, max_results=10, fetch_all=True
+        )
+        self.assertEqual(client.offsets, list(range(2, 12)))
+        self.assertEqual((result["startAt"], result["total"], result["_returned_count"]), (2, 12, 10))
+        self.assertTrue(result["_pagination_complete"])
+
+    def test_repeated_page_values_are_rejected_even_when_offset_advances(self) -> None:
+        client = UnderfilledClient(total=10, repeat_value=True)
+        with self.assertRaisesRegex(ValueError, "pagination looks inconsistent"):
+            _tools(client, fetch_all_max_objects=10).execute_aql("q", max_results=10, fetch_all=True)
+        self.assertEqual(client.offsets, [0, 1])
+
+    def test_premature_last_page_cannot_return_partial_result_as_complete(self) -> None:
+        client = PrematureLastClient()
+        with self.assertRaisesRegex(ValueError, "returned 5 of 12.*pagination looks inconsistent"):
+            _tools(client).execute_aql("q", max_results=5, fetch_all=True)
+        self.assertEqual(client.requests, ["/object/aql/totalcount", "/object/aql"])
+
     def test_paging_arguments_are_bounded(self) -> None:
         tools = _tools(AqlClient(total=5))
         for kwargs in ({"max_results": 0}, {"max_results": 501}, {"start_at": -1}):
@@ -140,6 +204,12 @@ class SearchAssetsLimitTests(unittest.TestCase):
     def test_model_page_size_is_bounded(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_results must be between 1 and 500"):
             self._search(SearchPlan(aql="q", max_results=5_000), AqlClient(total=5_000))
+
+    def test_premature_last_page_cannot_return_partial_search(self) -> None:
+        client = PrematureLastClient()
+        with self.assertRaisesRegex(ValueError, "returned 5 of 12.*pagination looks inconsistent"):
+            self._search(SearchPlan(aql="q", fetch_all=True), client)
+        self.assertEqual(client.requests, ["/object/aql/totalcount", "/object/aql"])
 
     def test_final_search_metadata_counts_toward_byte_limit(self) -> None:
         plan = SearchPlan(aql="q")
