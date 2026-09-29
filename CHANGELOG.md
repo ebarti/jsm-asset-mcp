@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix `search_assets` with the Claude runtime (`anthropic`, `anthropic-vertex`, `anthropic-bedrock`), which failed every time with "AQL translator unexpectedly reported tool use": the Claude Agent SDK returns structured output through its built-in `StructuredOutput` tool. That tool is now accepted when it produced the parsed output; any other tool use still fails.
+
 ## 1.2.0
 
 Changes since v1.1.0:
