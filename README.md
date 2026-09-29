@@ -15,7 +15,7 @@ uv sync --frozen
 uv run --frozen python docs/examples/stdio_client.py
 ```
 
-The last command starts `main.py` over MCP stdio, initializes a session, and prints 18 tool names. It needs no Jira credentials and makes no Jira or paid-provider request. `uv run --frozen main.py` starts the same server and waits for an MCP client; it is **not** an interactive prompt or HTTP server. Keep protocol output on stdout and operational logs on stderr.
+The last command starts `main.py` over MCP stdio, initializes a session, and prints 18 tool names. Without Jira credentials it makes no Jira or paid-provider request. `uv run --frozen main.py` starts the same server and waits for an MCP client; it is **not** an interactive prompt or HTTP server. Keep protocol output on stdout and operational logs on stderr.
 
 For explicit read-only requests, copy [the environment template](docs/examples/.env.example) to `.env` in the repository root, replace its placeholder values, and keep that file private. The repo ignores `.env`. Then run:
 
@@ -139,7 +139,7 @@ See [tool arguments and response semantics](docs/tools.md) and [inventory, lifec
 
 `execute_aql` runs your AQL directly. Its default is one 25-object page; `fetch_all=true` calls total-count and pages until complete. `search_assets` may return objects or an exact count based on the question, and its `_generated_aql` field lets you inspect the translation. A count question returns no object values. There is no separate count, grouping, ranking, export, or scheduling tool. To answer “which owner has the most licenses,” fetch the relevant objects and group their owner values in the host or another program; do not treat a natural-language question as a built-in aggregate query.
 
-`list_object_schemas` and `get_schema_summary` use a 600-second cache **per server process**. Building the summary also caches its internal type and attribute reads. In contrast, the public `get_object_schema`, `list_object_types`, and `get_object_type_attributes` tools fetch fresh data from Jira on each call; object and AQL results are not cached. After a schema change, those direct tools can show new definitions while the summary remains stale until its cache expires or the server restarts. A server handshake only proves stdio startup; try an explicit read-only schema or AQL call to test Jira access.
+`list_object_schemas` and `get_schema_summary` use a 600-second cache **per server process** (`JSM_SCHEMA_CACHE_TTL`). With Jira credentials configured, the server builds the schema summary in the background at startup, so it makes Assets requests before any tool call; set `JSM_SCHEMA_PREFETCH=false` to prevent that. After expiry, the previous summary is served while it is rebuilt in the background. Building the summary also caches its internal type and attribute reads. In contrast, the public `get_object_schema`, `list_object_types`, and `get_object_type_attributes` tools fetch fresh data from Jira on each call; object and AQL results are not cached. After a schema change, those direct tools can show new definitions while the summary remains stale until its cache expires or the server restarts. A server handshake only proves stdio startup; try an explicit read-only schema or AQL call to test Jira access.
 
 ## Troubleshooting and verification limits
 

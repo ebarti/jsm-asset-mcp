@@ -32,6 +32,19 @@ def _parse_bool(name: str, raw: str | None, default: bool) -> bool:
     raise ValueError(f"{name} must be one of {sorted(_TRUE_VALUES | _FALSE_VALUES)}, got {raw!r}.")
 
 
+def _parse_positive_int(name: str, raw: str | None, default: int) -> int:
+    value = (raw or "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise ValueError(f"{name} must be a positive integer (seconds), got {raw!r}.") from None
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer (seconds), got {raw!r}.")
+    return parsed
+
+
 def _parse_schema_ids(name: str, raw: str | None) -> tuple[frozenset[str], bool]:
     """Parse a comma-separated list of object schema IDs.
 
@@ -90,6 +103,11 @@ class Settings:
     jira_api_token: str = ""
     jira_workspace_id: str = ""
     jira_cloud_id: str = ""
+
+    # Schema metadata cache lifetime, and whether to build the schema
+    # summary in the background as soon as the server starts.
+    schema_cache_ttl: int = 600
+    schema_prefetch: bool = True
 
     # When true, create/update/delete tools are not registered at all.
     read_only: bool = False
@@ -154,6 +172,12 @@ class Settings:
             jira_api_token=os.environ.get("JIRA_API_TOKEN", ""),
             jira_workspace_id=jira_workspace_id,
             jira_cloud_id=jira_cloud_id,
+            schema_cache_ttl=_parse_positive_int(
+                "JSM_SCHEMA_CACHE_TTL", os.environ.get("JSM_SCHEMA_CACHE_TTL"), 600
+            ),
+            schema_prefetch=_parse_bool(
+                "JSM_SCHEMA_PREFETCH", os.environ.get("JSM_SCHEMA_PREFETCH"), default=True
+            ),
             read_only=_parse_bool("JSM_READ_ONLY", os.environ.get("JSM_READ_ONLY"), default=False),
             write_schema_ids=write_schema_ids,
             write_all_schemas=write_all_schemas,
@@ -167,6 +191,13 @@ class Settings:
         )
 
     # ── Derived helpers ──────────────────────────────────────────────────
+
+    @property
+    def has_jira_credentials(self) -> bool:
+        """Whether enough is configured to attempt an Assets API call."""
+        return bool(
+            self.jira_email and self.jira_api_token and (self.jira_domain or self.jira_cloud_id)
+        )
 
     @property
     def write_scope(self) -> str:

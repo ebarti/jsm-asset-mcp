@@ -23,7 +23,9 @@ class TTLCache:
         if entry is None:
             return None
         if (time.time() - entry["ts"]) >= self._ttl:
-            del self._store[key]
+            # pop, not del: a background summary refresh may expire the same
+            # key concurrently with a tool call.
+            self._store.pop(key, None)
             return None
         return entry["data"]
 
