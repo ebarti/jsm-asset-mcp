@@ -7,12 +7,27 @@ server instances isolated by carrying their dependencies explicitly.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from jsm_asset_mcp import llm
 from jsm_asset_mcp.client import AssetsClient
 from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.schema import SchemaService
+
+
+_NUMERIC_ID_RE = re.compile(r"^[0-9]+$")
+
+
+def _numeric_id(name: str, value: object) -> str:
+    """Return *value* if it is a numeric Assets ID, else raise.
+
+    IDs come from the model and are interpolated into API paths, so a value
+    such as "1/../../objectschema/2" must not reach the client.
+    """
+    if not isinstance(value, str) or not _NUMERIC_ID_RE.fullmatch(value):
+        raise ValueError(f'{name} must be a numeric Assets ID such as "123"; got {value!r}.')
+    return value
 
 
 def _is_last_page(result: dict) -> bool:
@@ -88,7 +103,7 @@ class Toolset:
         Args:
             object_id: The unique identifier of the asset object.
         """
-        return self.deps.client.get(f"/object/{object_id}")
+        return self.deps.client.get(f"/object/{_numeric_id('object_id', object_id)}")
 
     def get_object_attributes(self, object_id: str) -> dict:
         """Retrieve all attributes of a specific object.
@@ -96,7 +111,7 @@ class Toolset:
         Args:
             object_id: The unique identifier of the asset object.
         """
-        return self.deps.client.get(f"/object/{object_id}/attributes")
+        return self.deps.client.get(f"/object/{_numeric_id('object_id', object_id)}/attributes")
 
     def create_object(self, object_type_id: str, attributes: list[dict]) -> dict:
         """Create a new object in JSM Assets.
@@ -108,7 +123,7 @@ class Toolset:
                         Example: [{"objectTypeAttributeId": "123", "objectAttributeValues": [{"value": "My Server"}]}]
         """
         return self.deps.client.post("/object/create", payload={
-            "objectTypeId": object_type_id,
+            "objectTypeId": _numeric_id("object_type_id", object_type_id),
             "attributes": attributes,
         })
 
@@ -121,8 +136,8 @@ class Toolset:
             attributes: Array of attribute objects to update. Each must have 'objectTypeAttributeId' and
                         'objectAttributeValues' (array with 'value' key).
         """
-        return self.deps.client.put(f"/object/{object_id}", payload={
-            "objectTypeId": object_type_id,
+        return self.deps.client.put(f"/object/{_numeric_id('object_id', object_id)}", payload={
+            "objectTypeId": _numeric_id("object_type_id", object_type_id),
             "attributes": attributes,
         })
 
@@ -132,7 +147,7 @@ class Toolset:
         Args:
             object_id: The ID of the object to delete.
         """
-        return self.deps.client.delete(f"/object/{object_id}")
+        return self.deps.client.delete(f"/object/{_numeric_id('object_id', object_id)}")
 
     # ── Schema introspection ────────────────────────────────────────────
 
@@ -146,7 +161,7 @@ class Toolset:
         Args:
             schema_id: The ID of the object schema.
         """
-        return self.deps.client.get(f"/objectschema/{schema_id}")
+        return self.deps.client.get(f"/objectschema/{_numeric_id('schema_id', schema_id)}")
 
     def list_object_types(self, schema_id: str) -> list[dict]:
         """List all object types in a schema (flat list).
@@ -154,7 +169,7 @@ class Toolset:
         Args:
             schema_id: The ID of the object schema.
         """
-        return self.deps.client.get(f"/objectschema/{schema_id}/objecttypes/flat")
+        return self.deps.client.get(f"/objectschema/{_numeric_id('schema_id', schema_id)}/objecttypes/flat")
 
     def get_object_type_attributes(self, object_type_id: str) -> list[dict]:
         """Get all attribute definitions for an object type. Useful for understanding what
@@ -163,7 +178,7 @@ class Toolset:
         Args:
             object_type_id: The ID of the object type.
         """
-        return self.deps.client.get(f"/objecttype/{object_type_id}/attributes")
+        return self.deps.client.get(f"/objecttype/{_numeric_id('object_type_id', object_type_id)}/attributes")
 
     def get_schema_summary(self) -> str:
         """Get a human-readable summary of all object schemas, object types, and their
@@ -362,7 +377,7 @@ class Toolset:
         Args:
             object_id: The unique identifier of the asset object.
         """
-        return self.deps.client.get(f"/object/{object_id}/history")
+        return self.deps.client.get(f"/object/{_numeric_id('object_id', object_id)}/history")
 
     def get_connected_tickets(self, object_id: str) -> dict:
         """Get Jira tickets connected to an asset object.
@@ -370,4 +385,4 @@ class Toolset:
         Args:
             object_id: The unique identifier of the asset object.
         """
-        return self.deps.client.get(f"/objectconnectedtickets/{object_id}/tickets")
+        return self.deps.client.get(f"/objectconnectedtickets/{_numeric_id('object_id', object_id)}/tickets")
