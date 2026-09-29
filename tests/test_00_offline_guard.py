@@ -23,7 +23,8 @@ if _loaded is None or Path(getattr(_loaded, "__file__", "")).resolve() != _GUARD
 
 class OfflineGuardTests(unittest.TestCase):
     def test_default_discovery_scrubs_inherited_credentials(self):
-        env = dict(os.environ, PYTHONPATH=".", JIRA_API_TOKEN="synthetic-sentinel")
+        env = dict(os.environ, JIRA_API_TOKEN="synthetic-sentinel")
+        env.pop("PYTHONPATH", None)
         env.pop("PYTHON_DOTENV_DISABLED", None)
         probe = (
             "import os, unittest; "
