@@ -33,4 +33,40 @@ jobs:
       - name: Install frozen dependencies
         run: uv sync --all-extras --frozen
       - name: Run full test suite
+        env:
+          PYTHONPATH: .:tests
         run: uv run --all-extras --frozen python -m unittest discover -s tests
+
+  provider-contract:
+    name: Provider contract (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        provider:
+          - anthropic
+          - anthropic-vertex
+          - anthropic-bedrock
+          - gemini
+          - antigravity
+          - codex
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      - name: Install frozen dependencies
+        run: uv sync --all-extras --frozen
+      - name: Run selected provider contract
+        env:
+          PYTHONPATH: .:tests
+        run: uv run --all-extras --frozen python tests/test_provider_contract.py --provider "${{ matrix.provider }}"

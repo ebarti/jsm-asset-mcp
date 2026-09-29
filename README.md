@@ -154,6 +154,18 @@ See [tool arguments and response semantics](docs/tools.md) and [inventory, lifec
 
 Local tests and simulated provider responses cover the runtime integration. A separate read-only Jira check covered discovery, schema/type/attribute reads, AQL/count, object attributes/history, and connected tickets; it did not authorize or exercise live writes. Live translation-provider calls were not part of that check. Replace all fictional names and IDs in the examples with your own schema values.
 
+## Testing the provider contracts
+
+CI runs on pull requests and pushes to `main` with Python 3.13 and the frozen all-extras lockfile. It runs the full unittest suite and six visible provider jobs, one each for `anthropic`, `anthropic-vertex`, `anthropic-bedrock`, `gemini`, `antigravity`, and `codex`. Run the same offline checks locally with:
+
+```bash
+uv sync --all-extras --frozen
+PYTHONPATH=.:tests uv run --all-extras --frozen python -m unittest discover -s tests
+PYTHONPATH=.:tests uv run --all-extras --frozen python tests/test_provider_contract.py --provider anthropic
+```
+
+Replace `anthropic` with any of the other five exact names to run only that provider's contract; the selector rejects unknown names. `PYTHONPATH=.:tests` activates the test guard, which clears inherited provider/Jira credentials, disables dotenv loading, and blocks non-loopback Python network connections. The tests use the real application and agent-runtime-kit adapters with simulated vendor responses. The full suite also exercises the bundled Codex process against a loopback Responses API and rejects an injected local command. These checks do not verify live authentication, network service behavior, or model responses for any provider.
+
 ## License and release notes
 
 MIT; see [LICENSE](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for v1.2.0 changes since v1.1.0.
