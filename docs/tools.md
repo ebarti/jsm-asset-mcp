@@ -1,6 +1,6 @@
 # Tool reference
 
-The server exposes these **14** MCP tools, or 11 with `JSM_READ_ONLY=true`. All names below are exact. Inputs are JSON objects; IDs are strings even when Jira displays them as numbers. The object schema, type, and attribute names in [the recipes](recipes.md) are fictional. Discover IDs with `list_object_schemas`, `list_object_types`, and `get_object_type_attributes` before using them. The `id` from an object response is the input to the object read/write tools; an object's display key (for example `LAB-1`) is useful in AQL but is not substituted for an ID in these calls.
+The server exposes these **14** MCP tools, or 11 with `JSM_READ_ONLY=true`. All names below are exact. Inputs are JSON objects; IDs are strings even when Jira displays them as numbers, and must contain digits only (for example `"123"`): anything else is refused before a request is made. The object schema, type, and attribute names in [the recipes](recipes.md) are fictional. Discover IDs with `list_object_schemas`, `list_object_types`, and `get_object_type_attributes` before using them. The `id` from an object response is the input to the object read/write tools; an object's display key (for example `LAB-1`) is useful in AQL but is not substituted for an ID in these calls.
 
 | Tool | Inputs | What it returns |
 | --- | --- | --- |

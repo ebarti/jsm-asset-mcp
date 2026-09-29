@@ -26,7 +26,7 @@ uv run --frozen python docs/examples/stdio_client.py aql 'objectType = "Laptop"'
 
 Those commands contact your Jira workspace. The AQL type name must exist in your schema. The example never calls create, update, delete, or `search_assets`.
 
-Set `JIRA_DOMAIN` to the site hostname, for example `example.atlassian.net`, without `https://`. Set `JIRA_EMAIL` and `JIRA_API_TOKEN` for that Jira identity. The server looks up `JIRA_CLOUD_ID` through the site's tenant-info endpoint and `JIRA_WORKSPACE_ID` through the cloud gateway if you omit them. You may set both IDs explicitly to skip discovery; a cloud ID is not an Atlassian organization ID. The Assets API base URL is `https://api.atlassian.com/ex/jira/{cloudId}/jsm/assets/workspace/{workspaceId}/v1`. For classic tokens, workspace discovery can fall back to the site-hosted JSM route after a 401, 403, or 404 from the gateway. [Atlassian's token guidance](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/) explains token types and scopes.
+Set `JIRA_DOMAIN` to the site hostname, for example `example.atlassian.net`, without `https://`. Because discovery can send your API token to that host, the server refuses anything that is not a `<site>.atlassian.net` hostname, and requires the cloud and workspace IDs, set or discovered, to be UUIDs. Set `JIRA_EMAIL` and `JIRA_API_TOKEN` for that Jira identity. The server looks up `JIRA_CLOUD_ID` through the site's tenant-info endpoint and `JIRA_WORKSPACE_ID` through the cloud gateway if you omit them. You may set both IDs explicitly to skip discovery; a cloud ID is not an Atlassian organization ID. The Assets API base URL is `https://api.atlassian.com/ex/jira/{cloudId}/jsm/assets/workspace/{workspaceId}/v1`. For classic tokens, workspace discovery can fall back to the site-hosted JSM route after a 401, 403, or 404 from the gateway. [Atlassian's token guidance](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/) explains token types and scopes.
 
 ## Natural-language translation providers
 
@@ -153,6 +153,18 @@ See [tool arguments and response semantics](docs/tools.md) and [inventory, lifec
 | Natural-language tool times out | Raise the host's tool timeout beyond the translator's 90 seconds, especially for large schemas or multiple Jira pages. Check provider availability separately from Jira. |
 
 Local tests and simulated provider responses cover the runtime integration. A separate read-only Jira check covered discovery, schema/type/attribute reads, AQL/count, object attributes/history, and connected tickets; it did not authorize or exercise live writes. Live translation-provider calls were not part of that check. Replace all fictional names and IDs in the examples with your own schema values.
+
+## Testing the provider contracts
+
+CI runs on pull requests and pushes to `main` with Python 3.13 and the frozen all-extras lockfile. It runs the full unittest suite and six visible provider jobs, one each for `anthropic`, `anthropic-vertex`, `anthropic-bedrock`, `gemini`, `antigravity`, and `codex`. Run the same offline checks locally with:
+
+```bash
+uv sync --all-extras --frozen
+uv run --all-extras --frozen python -m unittest discover -s tests
+PYTHONPATH=.:tests uv run --all-extras --frozen python tests/test_provider_contract.py --provider anthropic
+```
+
+Replace `anthropic` with any of the other five exact names to run only that provider's contract; the selector rejects unknown names. Default unittest discovery loads the test guard before the other tests, while CI and release workflows preload it at process startup with `PYTHONPATH=.:tests`. The guard clears inherited provider/Jira credentials, keeps dotenv disabled even when a test clears the environment, and blocks non-loopback Python network connections. The tests use the real application and agent-runtime-kit adapters with simulated vendor responses. The full suite also exercises the bundled Codex process against a loopback Responses API and rejects an injected local command. These checks do not verify live authentication, network service behavior, or model responses for any provider.
 
 ## License and release notes
 
