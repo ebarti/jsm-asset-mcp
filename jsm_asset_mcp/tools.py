@@ -20,6 +20,13 @@ def _json_size(payload: object) -> int:
     return len(json.dumps(payload, separators=(",", ":"), default=str))
 
 
+def _attribute_identity(attribute: dict) -> object:
+    return attribute.get("globalId") or (
+        (attribute.get("workspaceId"), attribute.get("id"))
+        if attribute.get("id") is not None else json.dumps(attribute, sort_keys=True)
+    )
+
+
 _NUMERIC_ID_RE = re.compile(r"^[0-9]+$")
 
 
@@ -382,8 +389,10 @@ class Toolset:
             )
         # Guard against an API whose totals and pages disagree.
         max_pages = -(-cap // max_results) + 1
-        size = 0
-        returned = 0
+        merged_values: list[dict] = []
+        merged_attributes: list[dict] = []
+        seen_attributes: set[object] = set()
+        has_attributes = False
 
         while True:
             if len(pages) >= max_pages:
@@ -392,12 +401,32 @@ class Toolset:
                     f"total of {expected_total}; the Assets API pagination looks inconsistent."
                 )
             page = self._fetch_aql_page(query, next_start, max_results, include_attributes)
-            pages.append(page)
-            size += _json_size(page)
-            returned += len(page.get("values", []))
-            self._check_result_size(size, returned)
-
             values = page.get("values", [])
+            merged_values.extend(values)
+            if len(merged_values) > cap:
+                raise ValueError(
+                    f"Assets returned {len(merged_values)} objects, above the fetch_all limit of "
+                    f"{cap} (JSM_FETCH_ALL_MAX_OBJECTS)."
+                )
+            if "objectTypeAttributes" in page:
+                has_attributes = True
+                unique_attributes = []
+                for attribute in page["objectTypeAttributes"]:
+                    identity = _attribute_identity(attribute)
+                    if identity not in seen_attributes:
+                        seen_attributes.add(identity)
+                        unique_attributes.append(attribute)
+                        merged_attributes.append(attribute)
+                # Keep only definitions that can appear in the merged result.
+                page = {**page, "objectTypeAttributes": unique_attributes}
+            pages.append(page)
+            # This is a lower bound on the returned JSON, so it can stop an
+            # oversized crawl early without rejecting repeated page metadata.
+            lower_bound = {"values": merged_values}
+            if has_attributes:
+                lower_bound["objectTypeAttributes"] = merged_attributes
+            self._check_result_size(_json_size(lower_bound), len(merged_values))
+
             if _is_last_page(page):
                 break
             if not values:
@@ -408,7 +437,9 @@ class Toolset:
             if next_start >= expected_total:
                 break
 
-        return self._merge_aql_pages(pages, max_results, expected_total)
+        result = self._merge_aql_pages(pages, max_results, expected_total)
+        self._check_result_size(_json_size(result), len(result.get("values", [])))
+        return result
 
     def _merge_aql_pages(
         self,
@@ -436,10 +467,7 @@ class Toolset:
         for page in pages:
             values.extend(page.get("values", []))
             for attribute in page.get("objectTypeAttributes", []):
-                identity = attribute.get("globalId") or (
-                    (attribute.get("workspaceId"), attribute.get("id"))
-                    if attribute.get("id") is not None else json.dumps(attribute, sort_keys=True)
-                )
+                identity = _attribute_identity(attribute)
                 if identity not in seen_attributes:
                     seen_attributes.add(identity)
                     attributes.append(attribute)
@@ -526,7 +554,6 @@ class Toolset:
             )
         else:
             result = self._fetch_aql_page(plan.aql, 0, page_size, include_attributes=True)
-            self._check_result_size(_json_size(result), len(result.get("values", [])))
             result["total"] = total_count
             result["_total_count"] = total_count
 
@@ -535,6 +562,7 @@ class Toolset:
         result["_llm_max_results"] = plan.max_results
         result["_llm_fetch_all"] = plan.fetch_all
         result["_result_type"] = plan.result_type
+        self._check_result_size(_json_size(result), len(result.get("values", [])))
         return result
 
     # ── Related data ─────────────────────────────────────────────────────

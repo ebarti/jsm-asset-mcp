@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.llm import SearchPlan
-from jsm_asset_mcp.tools import Dependencies, Toolset
+from jsm_asset_mcp.tools import Dependencies, Toolset, _json_size
 
 
 class AqlClient:
@@ -23,6 +23,22 @@ class AqlClient:
         size = 1 if self.stuck else params["maxResults"]
         values = [{"id": str(i), "pad": "x" * self.blob} for i in range(start, min(start + size, self.total))]
         return {"startAt": start, "values": values, "isLast": (not self.stuck) and start + len(values) >= self.total}
+
+
+class RepeatedMetadataClient(AqlClient):
+    """The API repeats one large attribute definition on every object page."""
+
+    def __init__(self) -> None:
+        super().__init__(total=39, blob=0)
+        self.pages: list[dict] = []
+        self.attribute = {"globalId": "space:1", "name": "x" * 27_000}
+
+    def post(self, path, payload=None, params=None):
+        result = super().post(path, payload, params)
+        if path == "/object/aql":
+            result["objectTypeAttributes"] = [self.attribute]
+            self.pages.append(result)
+        return result
 
 
 class StaticSchema:
@@ -56,6 +72,40 @@ class FetchAllLimitTests(unittest.TestCase):
             _tools(client, max_result_bytes=60_000).execute_aql("q", max_results=25, fetch_all=True)
         self.assertLess(client.requests.count("/object/aql"), 12)
 
+    def test_repeated_page_metadata_is_measured_after_deduplication(self) -> None:
+        client = RepeatedMetadataClient()
+        result = _tools(client).execute_aql("q", max_results=1, fetch_all=True)
+        self.assertGreater(sum(_json_size(page) for page in client.pages), 1_048_576)
+        self.assertLess(_json_size(result), 1_048_576)
+        self.assertEqual(result["objectTypeAttributes"], [client.attribute])
+        self.assertEqual([value["id"] for value in result["values"]], [str(i) for i in range(39)])
+        self.assertEqual((result["_returned_count"], result["_page_count"]), (39, 39))
+        self.assertTrue(result["_pagination_complete"])
+
+        final_size = _json_size(result)
+        accepted = _tools(RepeatedMetadataClient(), max_result_bytes=final_size).execute_aql(
+            "q", max_results=1, fetch_all=True
+        )
+        self.assertEqual(_json_size(accepted), final_size)
+        with self.assertRaisesRegex(ValueError, "JSM_MAX_RESULT_BYTES"):
+            _tools(RepeatedMetadataClient(), max_result_bytes=final_size - 1).execute_aql(
+                "q", max_results=1, fetch_all=True
+            )
+
+    def test_fetch_all_refuses_an_api_page_above_the_object_cap(self) -> None:
+        client = AqlClient(total=1)
+
+        def oversized_post(path, payload=None, params=None):
+            client.requests.append(path)
+            if path == "/object/aql/totalcount":
+                return {"totalCount": 1}
+            return {"startAt": 0, "values": [{"id": str(i)} for i in range(501)], "isLast": True}
+
+        with patch.object(client, "post", side_effect=oversized_post):
+            with self.assertRaisesRegex(ValueError, "JSM_FETCH_ALL_MAX_OBJECTS"):
+                _tools(client).execute_aql("q", fetch_all=True)
+        self.assertEqual(client.requests, ["/object/aql/totalcount", "/object/aql"])
+
     def test_byte_limit_applies_to_a_single_page(self) -> None:
         with self.assertRaisesRegex(ValueError, "JSM_MAX_RESULT_BYTES"):
             _tools(AqlClient(total=100, blob=2_000), max_result_bytes=50_000).execute_aql("q", max_results=100)
@@ -74,9 +124,9 @@ class FetchAllLimitTests(unittest.TestCase):
 
 
 class SearchAssetsLimitTests(unittest.TestCase):
-    def _search(self, plan: SearchPlan, client: AqlClient):
+    def _search(self, plan: SearchPlan, client: AqlClient, question: str = "question", **settings):
         with patch("jsm_asset_mcp.tools.llm.translate_to_search_plan", return_value=plan):
-            return _tools(client).search_assets("question")
+            return _tools(client, **settings).search_assets(question)
 
     def test_model_chosen_fetch_all_is_bounded(self) -> None:
         client = AqlClient(total=5_000)
@@ -90,6 +140,43 @@ class SearchAssetsLimitTests(unittest.TestCase):
     def test_model_page_size_is_bounded(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_results must be between 1 and 500"):
             self._search(SearchPlan(aql="q", max_results=5_000), AqlClient(total=5_000))
+
+    def test_final_search_metadata_counts_toward_byte_limit(self) -> None:
+        plan = SearchPlan(aql="q")
+        question = "q" * 400
+        result = self._search(plan, AqlClient(total=1, blob=600), question)
+        final_size = _json_size(result)
+        self.assertGreater(final_size, 1_024)
+        self.assertEqual(
+            _json_size(self._search(plan, AqlClient(total=1, blob=600), question, max_result_bytes=final_size)),
+            final_size,
+        )
+        with self.assertRaisesRegex(ValueError, "JSM_MAX_RESULT_BYTES"):
+            self._search(plan, AqlClient(total=1, blob=600), question, max_result_bytes=final_size - 1)
+
+    def test_fetch_all_search_metadata_counts_toward_byte_limit(self) -> None:
+        plan = SearchPlan(aql="q", fetch_all=True)
+        question = "q" * 400
+        client = AqlClient(total=2)
+        pre_metadata = _tools(client)._fetch_all_aql("q", 0, 1, include_attributes=True)
+        pre_size = _json_size(pre_metadata)
+        result = self._search(plan, AqlClient(total=2), question)
+        self.assertGreater(_json_size(result), pre_size)
+        with self.assertRaisesRegex(ValueError, "JSM_MAX_RESULT_BYTES"):
+            self._search(plan, AqlClient(total=2), question, max_result_bytes=pre_size)
+
+    def test_count_quantity_is_unbounded_but_final_json_has_byte_limit(self) -> None:
+        plan = SearchPlan(aql="q", result_type="count")
+        question = "q" * 400
+        result = self._search(plan, AqlClient(total=10_000), question)
+        self.assertEqual((result["totalCount"], result["values"]), (10_000, []))
+        final_size = _json_size(result)
+        self.assertEqual(
+            _json_size(self._search(plan, AqlClient(total=10_000), question, max_result_bytes=final_size)),
+            final_size,
+        )
+        with self.assertRaisesRegex(ValueError, "JSM_MAX_RESULT_BYTES"):
+            self._search(plan, AqlClient(total=10_000), question, max_result_bytes=final_size - 1)
 
 
 class LimitSettingsTests(unittest.TestCase):
