@@ -54,6 +54,19 @@ class JiraDomainTests(unittest.TestCase):
 
 
 class DiscoveryIdTests(unittest.TestCase):
+    def test_direct_settings_ids_must_be_uuids_before_authenticated_request(self) -> None:
+        # Callers can construct Settings without from_env's startup validation.
+        for field in ("jira_cloud_id", "jira_workspace_id"):
+            with self.subTest(field=field):
+                settings = Settings(
+                    jira_email="me@example.com", jira_api_token="t",
+                    **{field: "bad/../id"},
+                )
+                with patch("jsm_asset_mcp.config.httpx.get") as http_get:
+                    with self.assertRaisesRegex(ValueError, "JIRA_(CLOUD|WORKSPACE)_ID"):
+                        settings.resolve_workspace_id()
+                http_get.assert_not_called()
+
     def test_ids_from_environment_must_be_uuids(self) -> None:
         for name in ("JIRA_CLOUD_ID", "JIRA_WORKSPACE_ID"):
             for raw in ("abc", f"{CLOUD}/../x", f"{CLOUD}?q=1"):

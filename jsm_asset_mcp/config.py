@@ -140,7 +140,7 @@ class Settings:
     def resolve_cloud_id(self) -> str:
         """Return ``cloud_id``, auto-discovering from ``jira_domain`` if needed."""
         if self.jira_cloud_id:
-            return self.jira_cloud_id
+            return _validate_uuid("JIRA_CLOUD_ID", self.jira_cloud_id, "settings")
 
         if not self.jira_domain:
             raise ValueError("JIRA_DOMAIN environment variable is required if JIRA_CLOUD_ID is not provided.")
@@ -161,7 +161,7 @@ class Settings:
     def resolve_workspace_id(self) -> str:
         """Return ``workspace_id``, auto-discovering from Jira if needed."""
         if self.jira_workspace_id:
-            return self.jira_workspace_id
+            return _validate_uuid("JIRA_WORKSPACE_ID", self.jira_workspace_id, "settings")
 
         cloud_id = self.resolve_cloud_id()
         gateway_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/servicedeskapi/assets/workspace"
