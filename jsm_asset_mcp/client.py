@@ -67,8 +67,9 @@ class AssetsClient:
 
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """``GET {base_url}{path}``."""
+        path = _checked(path)
         response = self._http.get(
-            f"{self.base_url}{_checked(path)}",
+            f"{self.base_url}{path}",
             auth=self._settings.auth,
             params=params,
         )
@@ -82,8 +83,9 @@ class AssetsClient:
         params: dict[str, Any] | None = None,
     ) -> Any:
         """``POST {base_url}{path}``."""
+        path = _checked(path)
         response = self._http.post(
-            f"{self.base_url}{_checked(path)}",
+            f"{self.base_url}{path}",
             auth=self._settings.auth,
             params=params,
             json=payload,
@@ -93,8 +95,9 @@ class AssetsClient:
 
     def put(self, path: str, payload: dict[str, Any]) -> Any:
         """``PUT {base_url}{path}``."""
+        path = _checked(path)
         response = self._http.put(
-            f"{self.base_url}{_checked(path)}",
+            f"{self.base_url}{path}",
             auth=self._settings.auth,
             json=payload,
         )
@@ -103,8 +106,9 @@ class AssetsClient:
 
     def delete(self, path: str) -> Any:
         """``DELETE {base_url}{path}``."""
+        path = _checked(path)
         response = self._http.delete(
-            f"{self.base_url}{_checked(path)}",
+            f"{self.base_url}{path}",
             auth=self._settings.auth,
         )
         response.raise_for_status()

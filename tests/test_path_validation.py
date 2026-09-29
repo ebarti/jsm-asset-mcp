@@ -1,7 +1,7 @@
 """Model-supplied IDs and API paths are validated before any request."""
 
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from jsm_asset_mcp.client import AssetsClient
 from jsm_asset_mcp.config import Settings
@@ -69,6 +69,30 @@ class ToolIdTests(unittest.TestCase):
 
 
 class ClientPathTests(unittest.TestCase):
+    def test_invalid_path_is_rejected_before_discovery_for_every_verb(self) -> None:
+        settings = Settings(
+            jira_domain="example.atlassian.net",
+            jira_email="me@example.com",
+            jira_api_token="t",
+        )
+        with patch("jsm_asset_mcp.client.httpx.Client") as http_client, patch(
+            "jsm_asset_mcp.config.httpx.get"
+        ) as discover:
+            client = AssetsClient(settings)
+            calls = {
+                "get": lambda: client.get("/object/1?x=1"),
+                "post": lambda: client.post("/object/1?x=1"),
+                "put": lambda: client.put("/object/1?x=1", {}),
+                "delete": lambda: client.delete("/object/1?x=1"),
+            }
+            for verb, call in calls.items():
+                with self.subTest(verb=verb):
+                    with self.assertRaisesRegex(ValueError, "unexpected Assets API path"):
+                        call()
+            discover.assert_not_called()
+            for verb in calls:
+                getattr(http_client.return_value, verb).assert_not_called()
+
     def test_client_refuses_unexpected_paths(self) -> None:
         settings = Settings(
             jira_email="me@example.com",
