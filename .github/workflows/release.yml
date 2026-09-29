@@ -30,6 +30,8 @@ jobs:
         run: uv sync --all-extras --frozen
 
       - name: Run tests
+        env:
+          PYTHONPATH: .:tests
         run: uv run --all-extras --frozen python -m unittest discover -s tests
 
       - name: Verify release version
