@@ -518,6 +518,23 @@ def _build_runtime(settings: Settings, data_dir: Path) -> Any:
     raise ValueError(f"Unknown LLM_PROVIDER '{provider}'.")
 
 
+# The Claude Agent SDK delivers `output_schema` results through its own
+# built-in tool of this name, so the kit reports it as a tool call.
+_STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
+
+
+def _unexpected_tool_calls(result: Any) -> list[Any]:
+    """Return tool calls other than the runtime's structured-output channel.
+
+    The structured-output tool is only tolerated when it actually produced
+    the parsed output; any other tool use still fails the translation.
+    """
+    calls = list(result.tool_calls)
+    if result.parsed_output_available:
+        calls = [call for call in calls if call.tool_name != _STRUCTURED_OUTPUT_TOOL]
+    return calls
+
+
 async def _query_structured_output(
     prompt: str,
     system_prompt: str,
@@ -544,7 +561,7 @@ async def _query_structured_output(
 
     if not result.is_success:
         raise ValueError(f"AQL translation failed: {result.error or result.finish_reason}")
-    if result.tool_calls:
+    if _unexpected_tool_calls(result):
         raise ValueError("AQL translator unexpectedly reported tool use.")
     if result.parsed_output_available:
         return result.parsed_output

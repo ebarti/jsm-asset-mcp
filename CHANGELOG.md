@@ -4,6 +4,12 @@
 
 - Add `get_object_reference_info` (inbound reference counts by object type and reference type, for impact analysis), `list_status_types`, `list_reference_types`, and `get_usage`.
 - Include global and per-schema status and reference type names, and the target type of reference attributes, in the schema summary used by `search_assets`, so translations can use exact values. Label attribute types 3, 5, and 6 (Confluence, Version, Project).
+- Add `JSM_READ_ONLY`: when `true`, `create_object`, `update_object`, and `delete_object` are not registered. Default `false`; unrecognised values fail at startup.
+- Add `JSM_WRITE_SCHEMA_IDS`: when set, writes are refused outside the listed object schema IDs, and when the target schema cannot be determined. Unset or `*` keeps today's behaviour.
+- Refuse non-numeric object, object type, and schema IDs before interpolating them into Assets API paths, so a value such as `1/../../objectschema/2` or a query string cannot reach another route. The client also refuses any path that is not a plain `/segment/segment` route.
+- Validate `JIRA_DOMAIN` as a `<site>.atlassian.net` hostname at startup and before each discovery request, since workspace discovery can send the API token to it. Require `JIRA_CLOUD_ID` and `JIRA_WORKSPACE_ID`, from the environment or discovery, to be UUIDs before they reach an authenticated URL.
+- Fix `search_assets` with the Claude runtime (`anthropic`, `anthropic-vertex`, `anthropic-bedrock`), which failed every time with "AQL translator unexpectedly reported tool use": the Claude Agent SDK returns structured output through its built-in `StructuredOutput` tool. That tool is now accepted when it produced the parsed output; any other tool use still fails.
+- Declare an 8-day dependency cooldown (`[tool.uv] exclude-newer = "P8D"`) so releases younger than 8 days are never locked, and refresh the lockfile under it: `pip-audit` reports no known vulnerability, against advisories for `cryptography`, `pyjwt`, `starlette`, `python-multipart`, `mcp`, `urllib3`, and others before. The cooldown moves `claude-agent-sdk` back to 0.2.157, `google-antigravity` to 0.1.17, and `uvicorn` to 0.53.0.
 
 ## 1.2.0
 

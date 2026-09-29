@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 
 import httpx
@@ -11,6 +12,63 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 _DISCOVERY_TIMEOUT = 30
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def _parse_bool(name: str, raw: str | None, default: bool) -> bool:
+    """Parse a boolean environment variable, rejecting unrecognised values.
+
+    Unset or empty means *default*. A typo such as ``JSM_READ_ONLY=ture`` is
+    rejected rather than guessed, because this flag guards destructive tools.
+    """
+    value = (raw or "").strip().lower()
+    if not value:
+        return default
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    raise ValueError(f"{name} must be one of {sorted(_TRUE_VALUES | _FALSE_VALUES)}, got {raw!r}.")
+
+
+def _parse_schema_ids(name: str, raw: str | None) -> tuple[frozenset[str], bool]:
+    """Parse a comma-separated list of object schema IDs.
+
+    Returns ``(ids, allow_all)``. Unset, empty, or ``*`` allows every schema.
+    IDs must be numeric, as returned by the Assets API, so that a schema
+    name or key is not mistaken for an ID.
+    """
+    value = (raw or "").strip()
+    if not value or value == "*":
+        return frozenset(), True
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    if not items or any(not re.fullmatch(r"[0-9]+", item) for item in items):
+        raise ValueError(f"{name} must be comma-separated numeric schema IDs, or * alone; got {raw!r}.")
+    return frozenset(items), False
+
+
+# Jira Cloud site hostnames. Discovery can send the API token to this host,
+# so anything else is refused.
+_JIRA_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$")
+# Cloud and workspace IDs are interpolated into authenticated API URLs.
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _validate_jira_domain(domain: str) -> str:
+    normalized = domain.strip().lower()
+    if not _JIRA_DOMAIN_RE.fullmatch(normalized):
+        raise ValueError(
+            "JIRA_DOMAIN must be a Jira Cloud site hostname such as example.atlassian.net, "
+            f"without scheme, path or port; got {domain!r}."
+        )
+    return normalized
+
+
+def _validate_uuid(name: str, value: str, source: str) -> str:
+    if not _UUID_RE.fullmatch(value):
+        raise ValueError(f"{name} from {source} must be a UUID; got {value!r}.")
+    return value
 
 
 @dataclass
@@ -32,6 +90,14 @@ class Settings:
     jira_api_token: str = ""
     jira_workspace_id: str = ""
     jira_cloud_id: str = ""
+
+    # When true, create/update/delete tools are not registered at all.
+    read_only: bool = False
+
+    # Object schemas the write tools may modify. write_all_schemas is true
+    # unless JSM_WRITE_SCHEMA_IDS lists specific schema IDs.
+    write_schema_ids: frozenset[str] = frozenset()
+    write_all_schemas: bool = True
 
     # LLM provider selection
     llm_provider: str = ""
@@ -69,12 +135,28 @@ class Settings:
     def from_env(cls) -> Settings:
         """Construct settings from environment variables / ``.env`` file."""
         load_dotenv()
+        write_schema_ids, write_all_schemas = _parse_schema_ids(
+            "JSM_WRITE_SCHEMA_IDS", os.environ.get("JSM_WRITE_SCHEMA_IDS")
+        )
+        jira_domain = os.environ.get("JIRA_DOMAIN", "")
+        jira_cloud_id = os.environ.get("JIRA_CLOUD_ID", "")
+        jira_workspace_id = os.environ.get("JIRA_WORKSPACE_ID", "")
+        # Fail at startup, not at the first tool call.
+        if jira_domain:
+            jira_domain = _validate_jira_domain(jira_domain)
+        if jira_cloud_id:
+            _validate_uuid("JIRA_CLOUD_ID", jira_cloud_id, "the environment")
+        if jira_workspace_id:
+            _validate_uuid("JIRA_WORKSPACE_ID", jira_workspace_id, "the environment")
         return cls(
-            jira_domain=os.environ.get("JIRA_DOMAIN", ""),
+            jira_domain=jira_domain,
             jira_email=os.environ.get("JIRA_EMAIL", ""),
             jira_api_token=os.environ.get("JIRA_API_TOKEN", ""),
-            jira_workspace_id=os.environ.get("JIRA_WORKSPACE_ID", ""),
-            jira_cloud_id=os.environ.get("JIRA_CLOUD_ID", ""),
+            jira_workspace_id=jira_workspace_id,
+            jira_cloud_id=jira_cloud_id,
+            read_only=_parse_bool("JSM_READ_ONLY", os.environ.get("JSM_READ_ONLY"), default=False),
+            write_schema_ids=write_schema_ids,
+            write_all_schemas=write_all_schemas,
             llm_provider=os.environ.get("LLM_PROVIDER", "anthropic").lower(),
             llm_model=os.environ.get("LLM_MODEL", ""),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
@@ -85,6 +167,13 @@ class Settings:
         )
 
     # ── Derived helpers ──────────────────────────────────────────────────
+
+    @property
+    def write_scope(self) -> str:
+        """Human-readable description of where writes are allowed."""
+        if self.write_all_schemas:
+            return "all object schemas"
+        return "object schemas " + ", ".join(sorted(self.write_schema_ids, key=int))
 
     @property
     def auth(self) -> tuple[str, str]:
@@ -108,17 +197,19 @@ class Settings:
     def resolve_cloud_id(self) -> str:
         """Return ``cloud_id``, auto-discovering from ``jira_domain`` if needed."""
         if self.jira_cloud_id:
-            return self.jira_cloud_id
+            return _validate_uuid("JIRA_CLOUD_ID", self.jira_cloud_id, "settings")
 
         if not self.jira_domain:
             raise ValueError("JIRA_DOMAIN environment variable is required if JIRA_CLOUD_ID is not provided.")
 
-        url = f"https://{self.jira_domain}/_edge/tenant_info"
+        domain = _validate_jira_domain(self.jira_domain)
+        url = f"https://{domain}/_edge/tenant_info"
         response = httpx.get(url, timeout=_DISCOVERY_TIMEOUT)
         response.raise_for_status()
         cloud_id = response.json().get("cloudId")
         if not cloud_id:
             raise ValueError("Could not discover cloudId from Jira. Set JIRA_CLOUD_ID manually.")
+        _validate_uuid("cloudId", str(cloud_id), url)
 
         self.jira_cloud_id = cloud_id
         logger.info("Auto-discovered cloudId: %s", cloud_id)
@@ -127,7 +218,7 @@ class Settings:
     def resolve_workspace_id(self) -> str:
         """Return ``workspace_id``, auto-discovering from Jira if needed."""
         if self.jira_workspace_id:
-            return self.jira_workspace_id
+            return _validate_uuid("JIRA_WORKSPACE_ID", self.jira_workspace_id, "settings")
 
         cloud_id = self.resolve_cloud_id()
         gateway_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/servicedeskapi/assets/workspace"
@@ -136,6 +227,7 @@ class Settings:
             "headers": {"Accept": "application/json"},
             "timeout": _DISCOVERY_TIMEOUT,
         }
+        source_url = gateway_url
         try:
             response = httpx.get(gateway_url, **request_options)
             response.raise_for_status()
@@ -143,7 +235,9 @@ class Settings:
             # Classic tokens may still require the site-hosted JSM route.
             if exc.response.status_code not in {401, 403, 404} or not self.jira_domain:
                 raise
-            legacy_url = f"https://{self.jira_domain}/rest/servicedeskapi/assets/workspace"
+            domain = _validate_jira_domain(self.jira_domain)
+            legacy_url = f"https://{domain}/rest/servicedeskapi/assets/workspace"
+            source_url = legacy_url
             response = httpx.get(legacy_url, **request_options)
             response.raise_for_status()
 
@@ -155,6 +249,7 @@ class Settings:
         )
         if not workspace_id:
             raise ValueError("Could not discover workspaceId from Jira. Set JIRA_WORKSPACE_ID manually.")
+        _validate_uuid("workspaceId", str(workspace_id), source_url)
 
         self.jira_workspace_id = workspace_id
         logger.info("Auto-discovered workspaceId: %s", workspace_id)
