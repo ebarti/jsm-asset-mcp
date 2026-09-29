@@ -48,7 +48,7 @@ class GeminiExtensionManifestTests(unittest.TestCase):
             async with stdio_client(parameters) as (reader, writer):
                 async with ClientSession(reader, writer) as session:
                     await session.initialize()
-                    self.assertEqual(len((await session.list_tools()).tools), 18)
+                    self.assertEqual(len((await session.list_tools()).tools), 24)
 
         asyncio.run(check())
 
