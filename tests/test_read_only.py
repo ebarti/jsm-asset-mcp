@@ -79,7 +79,7 @@ class ReadOnlySettingsTests(unittest.TestCase):
             self.assertTrue(Settings.from_env().write_all_schemas)
 
     def test_invalid_write_schema_ids_are_rejected(self) -> None:
-        for raw in ("LAB", "5,*", "5;18", "IT Assets"):
+        for raw in ("LAB", "5,*", "5;18", "IT Assets", ",,", "１２"):
             with self.subTest(raw=raw), patch.dict("os.environ", {"JSM_WRITE_SCHEMA_IDS": raw}, clear=True):
                 with self.assertRaisesRegex(ValueError, "JSM_WRITE_SCHEMA_IDS"):
                     Settings.from_env()
@@ -140,6 +140,19 @@ class WriteAllowListTests(unittest.TestCase):
 
     def _toolset(self, **settings) -> Toolset:
         return Toolset(Dependencies(settings=Settings(**settings), client=self.client, schema=None))
+
+    def test_invalid_write_ids_do_not_fetch_schema_or_write(self) -> None:
+        calls = (
+            lambda: self.tools.create_object("1/../../object/200", []),
+            lambda: self.tools.update_object("1/../../object/200", "86", []),
+            lambda: self.tools.update_object("100", "86?x=1", []),
+            lambda: self.tools.delete_object("100?x=1"),
+        )
+        for call in calls:
+            with self.assertRaisesRegex(ValueError, "numeric Assets ID"):
+                call()
+        self.assertEqual(self.client.reads, [])
+        self.assertEqual(self.client.writes, [])
 
     def test_writes_in_allowed_schema_go_through(self) -> None:
         self.tools.create_object("86", [])

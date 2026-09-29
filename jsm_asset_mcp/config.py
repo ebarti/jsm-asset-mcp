@@ -39,13 +39,15 @@ def _parse_schema_ids(name: str, raw: str | None) -> tuple[frozenset[str], bool]
     IDs must be numeric, as returned by the Assets API, so that a schema
     name or key is not mistaken for an ID.
     """
-    items = [item.strip() for item in (raw or "").split(",") if item.strip()]
-    if not items or items == ["*"]:
+    value = (raw or "").strip()
+    if not value or value == "*":
         return frozenset(), True
-    invalid = [item for item in items if not item.isdigit()]
-    if invalid:
-        raise ValueError(f"{name} must be comma-separated numeric schema IDs, or * alone; got {invalid!r}.")
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    if not items or any(not re.fullmatch(r"[0-9]+", item) for item in items):
+        raise ValueError(f"{name} must be comma-separated numeric schema IDs, or * alone; got {raw!r}.")
     return frozenset(items), False
+
+
 # Jira Cloud site hostnames. Discovery can send the API token to this host,
 # so anything else is refused.
 _JIRA_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$")
