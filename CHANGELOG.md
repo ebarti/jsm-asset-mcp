@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fix `search_assets` with the Claude runtime (`anthropic`, `anthropic-vertex`, `anthropic-bedrock`), which failed every time with "AQL translator unexpectedly reported tool use": the Claude Agent SDK returns structured output through its built-in `StructuredOutput` tool. That tool is now accepted when it produced the parsed output; any other tool use still fails.
+- Declare an 8-day dependency cooldown (`[tool.uv] exclude-newer = "P8D"`) so releases younger than 8 days are never locked, and refresh the lockfile under it: `pip-audit` reports no known vulnerability, against advisories for `cryptography`, `pyjwt`, `starlette`, `python-multipart`, `mcp`, `urllib3`, and others before. The cooldown moves `claude-agent-sdk` back to 0.2.157, `google-antigravity` to 0.1.17, and `uvicorn` to 0.53.0.
 
 ## 1.2.0
 
