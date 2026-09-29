@@ -160,11 +160,11 @@ CI runs on pull requests and pushes to `main` with Python 3.13 and the frozen al
 
 ```bash
 uv sync --all-extras --frozen
-PYTHONPATH=.:tests uv run --all-extras --frozen python -m unittest discover -s tests
+uv run --all-extras --frozen python -m unittest discover -s tests
 PYTHONPATH=.:tests uv run --all-extras --frozen python tests/test_provider_contract.py --provider anthropic
 ```
 
-Replace `anthropic` with any of the other five exact names to run only that provider's contract; the selector rejects unknown names. `PYTHONPATH=.:tests` activates the test guard, which clears inherited provider/Jira credentials, disables dotenv loading, and blocks non-loopback Python network connections. The tests use the real application and agent-runtime-kit adapters with simulated vendor responses. The full suite also exercises the bundled Codex process against a loopback Responses API and rejects an injected local command. These checks do not verify live authentication, network service behavior, or model responses for any provider.
+Replace `anthropic` with any of the other five exact names to run only that provider's contract; the selector rejects unknown names. Default unittest discovery loads the test guard before the other tests, while CI and release workflows preload it at process startup with `PYTHONPATH=.:tests`. The guard clears inherited provider/Jira credentials, keeps dotenv disabled even when a test clears the environment, and blocks non-loopback Python network connections. The tests use the real application and agent-runtime-kit adapters with simulated vendor responses. The full suite also exercises the bundled Codex process against a loopback Responses API and rejects an injected local command. These checks do not verify live authentication, network service behavior, or model responses for any provider.
 
 ## License and release notes
 

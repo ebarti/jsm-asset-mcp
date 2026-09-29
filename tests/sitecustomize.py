@@ -1,4 +1,4 @@
-"""Offline test process guard, activated by CI's PYTHONPATH=.:tests.
+"""Offline test process guard, preloaded by CI or default suite discovery.
 
 Runs before unittest imports application code. Vendor SDK boundaries are faked
 by tests; the native Codex adversarial test may still use a loopback server.
@@ -8,6 +8,8 @@ import errno
 import ipaddress
 import os
 import socket
+
+import dotenv.main
 
 
 _SECRET_NAMES = {
@@ -20,6 +22,11 @@ for _key in tuple(os.environ):
     if _key in _SECRET_NAMES or _key.startswith(_SECRET_PREFIXES):
         os.environ.pop(_key, None)
 os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+# Some tests deliberately replace the entire environment. Keep dotenv blocked
+# even while that replacement temporarily removes the environment flag.
+if not hasattr(dotenv.main, "_load_dotenv_disabled"):
+    raise RuntimeError("Offline tests require python-dotenv's disable gate")
+dotenv.main._load_dotenv_disabled = lambda: True
 
 
 def _loopback(host):
