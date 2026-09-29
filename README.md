@@ -135,7 +135,7 @@ gemini extensions update jsm-asset-mcp
 
 ## Use the tools responsibly
 
-See [tool arguments and response semantics](docs/tools.md) and [inventory, lifecycle, incident, relationship, audit, and write recipes](docs/recipes.md). The server exposes **11 read-oriented tools and 3 write tools**. It does not enforce a read-only mode or approval before writes. Restrict the host's tool allowlist and the Jira identity's permissions if you need a read-only workflow. The Python example only offers offline listing and two read-only calls.
+See [tool arguments and response semantics](docs/tools.md) and [inventory, lifecycle, incident, relationship, audit, and write recipes](docs/recipes.md). The server exposes **11 read-oriented tools and 3 write tools**. Set `JSM_READ_ONLY=true` to leave the write tools unregistered, or `JSM_WRITE_SCHEMA_IDS` to limit writes to listed object schemas; see [the write settings](docs/tools.md). The server never asks for approval before a write, so also restrict the host's tool allowlist and the Jira identity's permissions. The Python example only offers offline listing and two read-only calls.
 
 `execute_aql` runs your AQL directly. Its default is one 25-object page; `fetch_all=true` calls total-count and pages until complete. `search_assets` may return objects or an exact count based on the question, and its `_generated_aql` field lets you inspect the translation. A count question returns no object values. There is no separate count, grouping, ranking, export, or scheduling tool. To answer “which owner has the most licenses,” fetch the relevant objects and group their owner values in the host or another program; do not treat a natural-language question as a built-in aggregate query.
 

@@ -53,16 +53,15 @@ class Toolset:
     """Per-server collection of bound MCP tool callables."""
 
     deps: Dependencies
+    read_tools: list = field(init=False, repr=False)
+    write_tools: list = field(init=False, repr=False)
     all_tools: list = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.all_tools = [
+        self.read_tools = [
             self.execute_aql,
             self.get_object,
             self.get_object_attributes,
-            self.create_object,
-            self.update_object,
-            self.delete_object,
             self.list_object_schemas,
             self.get_object_schema,
             self.list_object_types,
@@ -72,6 +71,16 @@ class Toolset:
             self.get_object_history,
             self.get_connected_tickets,
         ]
+        self.write_tools = [
+            self.create_object,
+            self.update_object,
+            self.delete_object,
+        ]
+        # In read-only mode the write tools are never registered, so a client
+        # cannot call them even if its own permission rules would allow it.
+        self.all_tools = list(self.read_tools)
+        if not self.deps.settings.read_only:
+            self.all_tools.extend(self.write_tools)
 
     # ── Core CRUD ────────────────────────────────────────────────────────
 
@@ -113,8 +122,40 @@ class Toolset:
         """
         return self.deps.client.get(f"/object/{_numeric_id('object_id', object_id)}/attributes")
 
+    def _schema_of(self, resource: dict, what: str) -> str:
+        schema_id = resource.get("objectSchemaId")
+        if schema_id in (None, ""):
+            # Fail closed: an unknown schema can never match the allow-list.
+            raise PermissionError(f"Write refused: could not determine the object schema of {what}.")
+        return str(schema_id)
+
+    def _require_writable(self, schema_id: str, what: str) -> None:
+        settings = self.deps.settings
+        if settings.write_all_schemas or schema_id in settings.write_schema_ids:
+            return
+        raise PermissionError(
+            f"Write refused: {what} belongs to object schema {schema_id}, which is not in "
+            f"JSM_WRITE_SCHEMA_IDS (writes allowed on {settings.write_scope})."
+        )
+
+    def _check_object_type_writable(self, object_type_id: str) -> None:
+        if self.deps.settings.write_all_schemas:
+            return
+        object_type = self.deps.client.get(f"/objecttype/{object_type_id}")
+        what = f"object type {object_type_id}"
+        self._require_writable(self._schema_of(object_type, what), what)
+
+    def _check_object_writable(self, object_id: str) -> None:
+        if self.deps.settings.write_all_schemas:
+            return
+        obj = self.deps.client.get(f"/object/{object_id}")
+        what = f"object {obj.get('objectKey') or object_id}"
+        self._require_writable(self._schema_of(obj.get("objectType") or {}, what), what)
+
     def create_object(self, object_type_id: str, attributes: list[dict]) -> dict:
         """Create a new object in JSM Assets.
+
+        When JSM_WRITE_SCHEMA_IDS is set, only allowed in the listed object schemas.
 
         Args:
             object_type_id: The ID of the object type to create.
@@ -122,13 +163,17 @@ class Toolset:
                         'objectAttributeValues' (array with 'value' key).
                         Example: [{"objectTypeAttributeId": "123", "objectAttributeValues": [{"value": "My Server"}]}]
         """
+        object_type_id = _numeric_id("object_type_id", object_type_id)
+        self._check_object_type_writable(object_type_id)
         return self.deps.client.post("/object/create", payload={
-            "objectTypeId": _numeric_id("object_type_id", object_type_id),
+            "objectTypeId": object_type_id,
             "attributes": attributes,
         })
 
     def update_object(self, object_id: str, object_type_id: str, attributes: list[dict]) -> dict:
         """Update an existing object in JSM Assets.
+
+        When JSM_WRITE_SCHEMA_IDS is set, only allowed in the listed object schemas.
 
         Args:
             object_id: The ID of the object to update.
@@ -136,18 +181,27 @@ class Toolset:
             attributes: Array of attribute objects to update. Each must have 'objectTypeAttributeId' and
                         'objectAttributeValues' (array with 'value' key).
         """
-        return self.deps.client.put(f"/object/{_numeric_id('object_id', object_id)}", payload={
-            "objectTypeId": _numeric_id("object_type_id", object_type_id),
+        object_id = _numeric_id("object_id", object_id)
+        object_type_id = _numeric_id("object_type_id", object_type_id)
+        # Both: the object's current schema and the type it is written as.
+        self._check_object_writable(object_id)
+        self._check_object_type_writable(object_type_id)
+        return self.deps.client.put(f"/object/{object_id}", payload={
+            "objectTypeId": object_type_id,
             "attributes": attributes,
         })
 
     def delete_object(self, object_id: str) -> dict:
         """Delete an object from JSM Assets.
 
+        When JSM_WRITE_SCHEMA_IDS is set, only allowed in the listed object schemas.
+
         Args:
             object_id: The ID of the object to delete.
         """
-        return self.deps.client.delete(f"/object/{_numeric_id('object_id', object_id)}")
+        object_id = _numeric_id("object_id", object_id)
+        self._check_object_writable(object_id)
+        return self.deps.client.delete(f"/object/{object_id}")
 
     # ── Schema introspection ────────────────────────────────────────────
 
