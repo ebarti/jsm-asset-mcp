@@ -17,6 +17,8 @@ class SchemaClient:
             return self.pages.pop(0)
         if path.endswith("/objecttypes/flat"):
             return []
+        if path in ("/config/statustype", "/config/referencetype"):
+            return []
         raise AssertionError(f"Unexpected request: {path}")
 
 

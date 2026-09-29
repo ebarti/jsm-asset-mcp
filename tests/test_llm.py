@@ -410,6 +410,27 @@ class ResultBoundaryTests(unittest.TestCase):
         self.assertTrue(runtime.cancelled)
         self.assertTrue(runtime.closed)
 
+    def test_claude_structured_output_tool_is_not_treated_as_tool_use(self):
+        # The Claude Agent SDK returns output_schema results through its
+        # built-in StructuredOutput tool, which the kit audits as a tool call.
+        class FakeRuntime:
+            kind = AgentRuntimeKind.CLAUDE_AGENT_SDK
+
+            async def run(self, task):
+                return AgentResult(
+                    output="",
+                    parsed_output=PLAN,
+                    parsed_output_available=True,
+                    tool_calls=(ToolCallAudit(tool_name="StructuredOutput"),),
+                )
+
+            async def aclose(self):
+                pass
+
+        with patch("jsm_asset_mcp.llm._build_runtime", return_value=FakeRuntime()):
+            result = asyncio.run(_query_structured_output("question", "system", SEARCH_PLAN_SCHEMA, Settings(), 100))
+        self.assertEqual(result, PLAN)
+
     def test_timeout_cleanup_and_tool_audit_fail_closed(self):
         class FakeRuntime:
             kind = AgentRuntimeKind.CLAUDE_AGENT_SDK
@@ -427,6 +448,14 @@ class ResultBoundaryTests(unittest.TestCase):
         for result in (
             AgentResult(output="", finish_reason="failed", error="provider error"),
             AgentResult(output=json.dumps(PLAN), tool_calls=(ToolCallAudit(tool_name="read_file"),)),
+            # StructuredOutput without a parsed result is not the SDK's output channel.
+            AgentResult(output=json.dumps(PLAN), tool_calls=(ToolCallAudit(tool_name="StructuredOutput"),)),
+            AgentResult(
+                output="",
+                parsed_output=PLAN,
+                parsed_output_available=True,
+                tool_calls=(ToolCallAudit(tool_name="StructuredOutput"), ToolCallAudit(tool_name="read_file")),
+            ),
             AgentResult(output="not json"),
         ):
             with self.subTest(result=result):

@@ -15,6 +15,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
+
+import httpx
 
 from jsm_asset_mcp.cache import TTLCache
 from jsm_asset_mcp.client import AssetsClient
@@ -26,9 +29,16 @@ _TYPE_LABELS: dict[int, str] = {
     0: "Default",
     1: "Object Reference",
     2: "User",
+    3: "Confluence",
     4: "Group",
+    5: "Version",
+    6: "Project",
     7: "Status",
 }
+
+
+def _names(items: list[dict]) -> str:
+    return ", ".join(f'"{item.get("name", "?")}"' for item in items)
 
 
 class SchemaService:
@@ -139,6 +149,50 @@ class SchemaService:
         self._cache.set(cache_key, result)
         return result
 
+    def fetch_status_types(self, schema_id: str | None = None) -> list[dict]:
+        """Return status types: global ones when *schema_id* is ``None``,
+        otherwise only those defined in that schema."""
+        cache_key = f"statustypes_{schema_id or 'global'}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        params = {"objectSchemaId": schema_id} if schema_id else None
+        result = self._client.get("/config/statustype", params=params)
+        self._cache.set(cache_key, result)
+        return result
+
+    def fetch_reference_types(self, schema_id: str | None = None) -> list[dict]:
+        """Return reference types: global ones when *schema_id* is ``None``,
+        otherwise only those defined in that schema."""
+        cache_key = f"referencetypes_{schema_id or 'global'}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        params = {"objectSchemaId": schema_id} if schema_id else None
+        result = self._client.get("/config/referencetype", params=params)
+        self._cache.set(cache_key, result)
+        return result
+
+    def _optional_config_metadata(
+        self,
+        fetch: Callable[[str | None], list[dict]],
+        name: str,
+        schema_id: str | None = None,
+    ) -> list[dict]:
+        """Keep the required schema summary when config metadata is out of scope."""
+        try:
+            return fetch(schema_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {401, 403}:
+                raise
+            target = "global" if schema_id is None else f"schema {schema_id}"
+            logger.warning(
+                "Skipping %s enrichment for %s: Assets config API returned HTTP %s "
+                "(requires read:cmdb-config:jira).",
+                name, target, exc.response.status_code,
+            )
+            return []
+
     # ── High-level summary ───────────────────────────────────────────────
 
     def build_summary(self) -> str:
@@ -207,11 +261,27 @@ class SchemaService:
     def _compute_summary(self) -> str:
         lines: list[str] = []
 
+        # Exact status and reference-type names let the translator write
+        # `Status = "In Use"` or `refType IN ("Installed")` instead of guessing.
+        global_statuses = self._optional_config_metadata(self.fetch_status_types, "status types")
+        global_refs = self._optional_config_metadata(self.fetch_reference_types, "reference types")
+        if global_statuses:
+            lines.append(f"Global status types (all schemas): {_names(global_statuses)}")
+        if global_refs:
+            lines.append(f"Global reference types (all schemas): {_names(global_refs)}")
+
         for schema in self.fetch_all_schemas():
             schema_id = schema["id"]
             schema_name = schema.get("name", "Unknown")
             schema_key = schema.get("objectSchemaKey", "N/A")
             lines.append(f"\n## Schema: {schema_name} (ID: {schema_id}, Key: {schema_key})")
+
+            statuses = self._optional_config_metadata(self.fetch_status_types, "status types", schema_id)
+            if statuses:
+                lines.append(f"Status types: {_names(statuses)}")
+            refs = self._optional_config_metadata(self.fetch_reference_types, "reference types", schema_id)
+            if refs:
+                lines.append(f"Reference types: {_names(refs)}")
 
             for ot in self.fetch_object_types(schema_id):
                 ot_id = ot["id"]
@@ -229,6 +299,9 @@ class SchemaService:
                     type_label = _TYPE_LABELS.get(attr_type, f"Type({attr_type})")
                     if dt_name:
                         type_label = f"{type_label}/{dt_name}"
+                    target = (attr.get("referenceObjectType") or {}).get("name")
+                    if target:
+                        type_label = f"{type_label} -> {target}"
 
                     lines.append(f"  - {attr_name}: {type_label}")
 

@@ -39,8 +39,8 @@ class GeminiExtensionManifestTests(unittest.TestCase):
             "JIRA_DOMAIN": "example.atlassian.net",
             "JIRA_EMAIL": "example@example.com",
             "JIRA_API_TOKEN": "synthetic-token",
-            "JIRA_CLOUD_ID": "synthetic-cloud",
-            "JIRA_WORKSPACE_ID": "synthetic-workspace",
+            "JIRA_CLOUD_ID": "11111111-2222-3333-4444-555555555555",
+            "JIRA_WORKSPACE_ID": "66666666-7777-8888-9999-aaaaaaaaaaaa",
         }
 
         async def check() -> None:
@@ -48,7 +48,7 @@ class GeminiExtensionManifestTests(unittest.TestCase):
             async with stdio_client(parameters) as (reader, writer):
                 async with ClientSession(reader, writer) as session:
                     await session.initialize()
-                    self.assertEqual(len((await session.list_tools()).tools), 14)
+                    self.assertEqual(len((await session.list_tools()).tools), 18)
 
         asyncio.run(check())
 

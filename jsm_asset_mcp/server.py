@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,8 @@ from jsm_asset_mcp.cache import TTLCache
 from jsm_asset_mcp.client import AssetsClient
 from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.schema import SchemaService
+
+logger = logging.getLogger(__name__)
 
 
 def create_server(settings: Settings | None = None) -> FastMCP:
@@ -37,6 +40,10 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         schema=schema,
     )
     toolset = tools.Toolset(deps)
+    if settings.read_only:
+        logger.info("Read-only mode: create/update/delete tools are disabled.")
+    elif not settings.write_all_schemas:
+        logger.info("Write tools are limited to %s.", settings.write_scope)
 
     @asynccontextmanager
     async def lifespan(_: FastMCP) -> AsyncIterator[dict[str, object]]:
