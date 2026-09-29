@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `get_object_reference_info` (inbound reference counts by object type and reference type, for impact analysis), `list_status_types`, `list_reference_types`, and `get_usage`.
+- Include global and per-schema status and reference type names, and the target type of reference attributes, in the schema summary used by `search_assets`, so translations can use exact values. Label attribute types 3, 5, and 6 (Confluence, Version, Project).
 - Add `JSM_READ_ONLY`: when `true`, `create_object`, `update_object`, and `delete_object` are not registered. Default `false`; unrecognised values fail at startup.
 - Add `JSM_WRITE_SCHEMA_IDS`: when set, writes are refused outside the listed object schema IDs, and when the target schema cannot be determined. Unset or `*` keeps today's behaviour.
 - Refuse non-numeric object, object type, and schema IDs before interpolating them into Assets API paths, so a value such as `1/../../objectschema/2` or a query string cannot reach another route. The client also refuses any path that is not a plain `/segment/segment` route.

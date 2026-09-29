@@ -1,6 +1,6 @@
 # Jira Service Management Assets MCP server
 
-Connect Jira Cloud Assets to an MCP client. The server exposes **14 tools** for schema discovery, AQL search, object and ticket reads, and object create/update/delete. `search_assets` can translate a natural-language question to AQL through the supported [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) runtimes. The MCP host (Claude Desktop, Claude Code, Codex, Gemini CLI, or another stdio client) is independent of the translation provider you select.
+Connect Jira Cloud Assets to an MCP client. The server exposes **18 tools** for schema discovery, AQL search, object, reference and ticket reads, and object create/update/delete. `search_assets` can translate a natural-language question to AQL through the supported [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) runtimes. The MCP host (Claude Desktop, Claude Code, Codex, Gemini CLI, or another stdio client) is independent of the translation provider you select.
 
 Read the [complete tool reference](docs/tools.md) and [26 concrete recipes](docs/recipes.md). The [Python stdio example](docs/examples/stdio_client.py) lists all tools **offline by default**; its two optional Jira commands are read-only.
 
@@ -15,7 +15,7 @@ uv sync --frozen
 uv run --frozen python docs/examples/stdio_client.py
 ```
 
-The last command starts `main.py` over MCP stdio, initializes a session, and prints 14 tool names. It needs no Jira credentials and makes no Jira or paid-provider request. `uv run --frozen main.py` starts the same server and waits for an MCP client; it is **not** an interactive prompt or HTTP server. Keep protocol output on stdout and operational logs on stderr.
+The last command starts `main.py` over MCP stdio, initializes a session, and prints 18 tool names. It needs no Jira credentials and makes no Jira or paid-provider request. `uv run --frozen main.py` starts the same server and waits for an MCP client; it is **not** an interactive prompt or HTTP server. Keep protocol output on stdout and operational logs on stderr.
 
 For explicit read-only requests, copy [the environment template](docs/examples/.env.example) to `.env` in the repository root, replace its placeholder values, and keep that file private. The repo ignores `.env`. Then run:
 
@@ -135,7 +135,7 @@ gemini extensions update jsm-asset-mcp
 
 ## Use the tools responsibly
 
-See [tool arguments and response semantics](docs/tools.md) and [inventory, lifecycle, incident, relationship, audit, and write recipes](docs/recipes.md). The server exposes **11 read-oriented tools and 3 write tools**. Set `JSM_READ_ONLY=true` to leave the write tools unregistered, or `JSM_WRITE_SCHEMA_IDS` to limit writes to listed object schemas; see [the write settings](docs/tools.md). The server never asks for approval before a write, so also restrict the host's tool allowlist and the Jira identity's permissions. The Python example only offers offline listing and two read-only calls.
+See [tool arguments and response semantics](docs/tools.md) and [inventory, lifecycle, incident, relationship, audit, and write recipes](docs/recipes.md). The server exposes **15 read-oriented tools and 3 write tools**. Set `JSM_READ_ONLY=true` to leave the write tools unregistered, or `JSM_WRITE_SCHEMA_IDS` to limit writes to listed object schemas; see [the write settings](docs/tools.md). The server never asks for approval before a write, so also restrict the host's tool allowlist and the Jira identity's permissions. The Python example only offers offline listing and two read-only calls.
 
 `execute_aql` runs your AQL directly. Its default is one 25-object page; `fetch_all=true` calls total-count and pages until complete. `search_assets` may return objects or an exact count based on the question, and its `_generated_aql` field lets you inspect the translation. A count question returns no object values. There is no separate count, grouping, ranking, export, or scheduling tool. To answer “which owner has the most licenses,” fetch the relevant objects and group their owner values in the host or another program; do not treat a natural-language question as a built-in aggregate query.
 
