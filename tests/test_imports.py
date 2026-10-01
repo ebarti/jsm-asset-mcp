@@ -1,12 +1,15 @@
 """Read-only import monitoring tools."""
 
+import base64
 import json
 import time
 import unittest
 from unittest.mock import Mock, patch
 
+import httpx
 from mcp.server.fastmcp.exceptions import ToolError
 
+from jsm_asset_mcp import client as client_module
 from jsm_asset_mcp.client import AssetsClient
 from jsm_asset_mcp.config import Settings
 from jsm_asset_mcp.server import create_server
@@ -193,6 +196,58 @@ class RedactionTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(_redact_text(raw), expected)
 
+    def test_quoted_authorization_values_are_masked(self) -> None:
+        basic = base64.b64encode(b"svc:hunter2").decode()
+        cases = {
+            f'{{"Authorization": "Basic {basic}"}}': '{"Authorization": "Basic ***redacted***"}',
+            f"{{'Authorization': 'Basic {basic}'}}": "{'Authorization': 'Basic ***redacted***'}",
+            f'{{"authorization":"Basic {basic}"}}': '{"authorization":"Basic ***redacted***"}',
+            f'{{"Proxy-Authorization": "Basic {basic}"}}': '{"Proxy-Authorization": "Basic ***redacted***"}',
+            f'{{\\"Authorization\\": \\"Basic {basic}\\"}}': '{\\"Authorization\\": \\"Basic ***redacted***\\"}',
+            '{"Authorization": "Digest username=\\"svc\\", response=\\"hunter2\\""}':
+                '{"Authorization": "Digest ***redacted***"}',
+            '{"Authorization": "hunter2 hunter3"}': '{"Authorization": "***redacted***"}',
+            "headers={'Authorization': 'NTLM hunter2', 'Accept': 'json'}":
+                "headers={'Authorization': 'NTLM ***redacted***', 'Accept': 'json'}",
+            "Authorization: Basic hunter2, retrying": "Authorization: Basic ***redacted***, retrying",
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(_redact_text(raw), expected)
+
+    def test_quoted_values_end_at_their_unescaped_closing_quote(self) -> None:
+        cases = {
+            '{"password": "hun\\"ter2", "user": "svc"}': '{"password": "***redacted***", "user": "svc"}',
+            "{'password': 'hun\\'ter2', 'user': 'svc'}": "{'password': '***redacted***', 'user': 'svc'}",
+            '{\\"password\\": \\"hunter2\\", \\"user\\": \\"svc\\"}':
+                '{\\"password\\": \\"***redacted***\\", \\"user\\": \\"svc\\"}',
+            # An unterminated value cannot be told apart from what follows it.
+            'login failed {"password": "hunter2 and the rest': 'login failed {"password": "***redacted***',
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(_redact_text(raw), expected)
+
+    def test_credentials_are_masked_whole_whatever_their_length(self) -> None:
+        # Both sides of the former 256/512/4096-character bounds.
+        for length in (8, 255, 256, 257, 511, 512, 513, 4095, 4096, 4097, 20_000):
+            secret = ("eyJhbGciOiJSUzI1NiJ9." + "A" * length)[:length].ljust(8, "A")
+            forms = (
+                f'{{"access_token": "{secret}"}}',
+                f"{{'access_token': '{secret}'}}",
+                f"access_token={secret}&next=1",
+                f'{{"Authorization": "Bearer {secret}"}}',
+                f"Authorization: Basic {secret}",
+                f"sent Bearer {secret} upstream",
+                f"ldap://{secret}@dc01/x",
+            )
+            for raw in forms:
+                with self.subTest(length=length, form=raw[:24]):
+                    result = _redact_text(raw)
+                    self.assertNotIn(secret[-8:], result)
+                    self.assertIn(REDACTED, result)
+                    self.assertLess(len(result), 80)
+
     def test_ordinary_text_is_left_alone(self) -> None:
         for text in (
             "passed: 3 tests", "design: modern", "total tokens: 5", "Server=sql01;Database=cmdb",
@@ -206,6 +261,9 @@ class RedactionTests(unittest.TestCase):
         for text in (
             "a." * 50_000, "a+" * 50_000, "a-" * 50_000, "a://" * 25_000, "x_" * 50_000 + "=",
             "password" * 12_000, "db_password=" * 8_000, "authorization:" * 7_000, "bearer " * 14_000,
+            'password="' * 10_000, "token:'" * 14_000, 'password="a" ' * 8_000, '\\"token\\": \\"' * 6_000,
+            'pwd="' + "\\x" * 50_000, "authorization: basic " * 5_000, "x://" + "a" * 100_000,
+            "bearer " + "A" * 100_000,
         ):
             with self.subTest(text=text[:16]):
                 start = time.perf_counter()
@@ -501,6 +559,62 @@ class ImportRoutePathTests(unittest.TestCase):
             with self.subTest(path=path):
                 client.get(path)
                 self.assertTrue(client._http.get.call_args.args[0].endswith(f"/v1{path}"))
+
+
+class RedactionThroughServerTests(unittest.IsolatedAsyncioTestCase):
+    """Serialised connector credentials, from the HTTP response to the host."""
+
+    BASIC = base64.b64encode(b"svc-import:hunter2-basic").decode()
+    # JWT-shaped, longer than every former scan bound.
+    TOKEN = "eyJhbGciOiJSUzI1NiJ9." + "eyJzdWIiOiJzdmMifQ" * 100 + ".hunter2sig"
+    MESSAGES = (
+        f'request failed with headers {{"Authorization": "Basic {BASIC}"}}',
+        f"request failed with headers {{'Authorization': 'Basic {BASIC}'}}",
+        f'token refresh returned {{"access_token": "{TOKEN}"}}',
+        f"token refresh returned {{'access_token': '{TOKEN}'}}",
+        f"token refresh returned access_token={TOKEN}",
+    )
+    TOOLS = {
+        "get_import_progress": {"import_source_id": SOURCE},
+        "get_last_import_execution": {"import_source_id": SOURCE},
+        "get_import_execution_status": {"import_source_id": SOURCE, "execution_id": EXECUTION},
+        "get_import_source": {"import_source_id": SOURCE},
+    }
+
+    def _server(self, message: str):
+        def respond(request: httpx.Request) -> httpx.Response:
+            body = {"id": SOURCE, "status": "FAILED", "resultMessage": message, "description": message}
+            return httpx.Response(200, json=body)
+
+        real_client = httpx.Client
+
+        def mocked_client(**kwargs: object) -> httpx.Client:
+            return real_client(transport=httpx.MockTransport(respond), **kwargs)
+
+        settings = Settings(
+            jira_domain="example.atlassian.net",
+            jira_email="user@example.com",
+            jira_api_token="api-token",
+            jira_cloud_id="0b6ee1c8-2d4c-4a5e-9f1a-3c7d8e9f0a10",
+            jira_workspace_id="0b6ee1c8-2d4c-4a5e-9f1a-3c7d8e9f0a11",
+            read_only=True,
+            schema_prefetch=False,
+        )
+        with patch.object(client_module.httpx, "Client", mocked_client):
+            return create_server(settings)
+
+    async def test_import_tools_mask_serialised_credentials(self) -> None:
+        for message in self.MESSAGES:
+            server = self._server(message)
+            for tool, arguments in self.TOOLS.items():
+                with self.subTest(tool=tool, message=message[:48]):
+                    result = await server.call_tool(tool, arguments)
+                    text = result[0].text
+                    self.assertLess(len(text.encode()), Settings().max_result_bytes)
+                    self.assertNotIn(self.BASIC, text)
+                    self.assertNotIn("hunter2", text)
+                    self.assertNotIn("eyJzdWIiOiJzdmMifQ", text)
+                    self.assertIn(REDACTED, json.loads(text)["description"])
 
 
 if __name__ == "__main__":

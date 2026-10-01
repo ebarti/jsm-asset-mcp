@@ -58,22 +58,31 @@ _SECRET_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 # Credentials embedded in string values, whatever the key holding them.
-# These run on connector-written text before any size check, so every
-# repetition is bounded and each match can only start at a word start:
-# an unbounded scheme after \b made a 40 KB string take seconds.
-_URL_USERINFO_RE = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^\s/?#]{1,256}@")
-_INLINE_SECRET_RE = re.compile(
+# These run on connector-written text before any size check, so each match
+# can only start at a word start and the parts that locate a match are
+# bounded: an unbounded scheme after \b made a 40 KB string take seconds.
+# The credential itself is never length-bounded, since a bound would leave
+# the rest of a longer value, or all of a quoted one, unmasked.
+_URL_USERINFO_RE = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^\s/?#]+@")
+_BEARER_RE = re.compile(r"(?i)(?<![a-z0-9])(bearer\s{1,5})[A-Za-z0-9._~+/=-]{8,}")
+# The name and separator of an inline credential; group 1 is set for an
+# Authorization header, whose scheme stays readable. The quote before the
+# separator may be escaped, as in JSON serialised inside a string.
+_INLINE_SECRET_KEY_RE = re.compile(
     r"(?i)(?<![a-z0-9_-])"
-    r"([a-z0-9_-]{0,40}?(?:password|passwd|passphrase|pwd|pass|secret|token|credentials?"
-    r"|api[_-]?key|access[_-]?key|account[_-]?key|sig))"
-    r"""(["']?\s{0,5}[=:]\s{0,5})"""
-    r"""("[^"]{0,512}"|'[^']{0,512}'|[^"';&\s,]{1,512})"""
+    r"[a-z0-9_-]{0,40}?(?:password|passwd|passphrase|pwd|pass|secret|token|credentials?"
+    r"|api[_-]?key|access[_-]?key|account[_-]?key|sig|(authorization))"
+    r"""(?:\\?["'])?\s{0,5}[=:]\s{0,5}"""
 )
-_AUTH_HEADER_RE = re.compile(
-    r"""(?i)(?<![a-z0-9-])((?:proxy-)?authorization["']?\s{0,5}[=:]\s{0,5})"""
-    r"(?:(basic|bearer|digest|negotiate|ntlm)\s{1,5})?[^\s\"',;]{1,4096}"
-)
-_BEARER_RE = re.compile(r"(?i)(?<![a-z0-9])(bearer\s{1,5})[A-Za-z0-9._~+/=-]{8,4096}")
+_OPENING_QUOTE_RE = re.compile(r"""\\?["']""")
+# A quoted value ends at the first unescaped matching quote.
+_QUOTED_BODY_RE = {
+    '"': re.compile(r'(?:[^"\\]|\\.)*"', re.DOTALL),
+    "'": re.compile(r"(?:[^'\\]|\\.)*'", re.DOTALL),
+}
+_UNQUOTED_SECRET_RE = re.compile(r"""[^"';&\s,]*""")
+_UNQUOTED_AUTH_RE = re.compile(r"""[^\s"',;]*""")
+_AUTH_SCHEME_RE = re.compile(r"(?i)(?:basic|bearer|digest|negotiate|ntlm)\s{1,5}")
 # Keys naming the secret in a {"name": "password", "value": "..."} pair.
 _PAIR_NAME_KEYS = ("name", "key", "field", "label")
 _PAIR_VALUE_KEYS = ("value", "defaultValue")
@@ -125,23 +134,58 @@ def _is_masked_value(value: object) -> bool:
     return value is not None and not isinstance(value, bool) and value not in ("", [], {})
 
 
-def _mask_inline(match: re.Match) -> str:
-    value = match.group(3)
-    quote = value[0] if value[:1] in ("'", '"') else ""
-    return f"{match.group(1)}{match.group(2)}{quote}{_REDACTED}{quote}"
+def _quoted_value_end(text: str, start: int, quote: str) -> tuple[int, int] | None:
+    """Return (end of the value, end of its closing quote), or None if unterminated."""
+    if len(quote) == 2:  # \" or \': the value is itself escaped, so ends at the next one.
+        close = text.find(quote, start)
+        return None if close < 0 else (close, close + 2)
+    match = _QUOTED_BODY_RE[quote].match(text, start)
+    return None if match is None else (match.end() - 1, match.end())
 
 
-def _mask_auth_header(match: re.Match) -> str:
-    scheme = f"{match.group(2)} " if match.group(2) else ""
-    return f"{match.group(1)}{scheme}{_REDACTED}"
+def _mask_inline_secrets(text: str) -> str:
+    # A scan rather than re.sub: each value is located from where its name
+    # ends, so it is masked whole whatever its length, and the text after a
+    # masked value is never scanned again, which keeps the pass linear.
+    parts: list[str] = []
+    pos = 0
+    while (match := _INLINE_SECRET_KEY_RE.search(text, pos)) is not None:
+        start = match.end()
+        parts.append(text[pos:start])
+        is_auth = match.group(1) is not None
+        quote_match = _OPENING_QUOTE_RE.match(text, start)
+        quote = quote_match.group() if quote_match else ""
+        body = start + len(quote)
+        scheme = _AUTH_SCHEME_RE.match(text, body) if is_auth else None
+        kept = text[start:scheme.end()] if scheme else quote
+        if quote:
+            span = _quoted_value_end(text, body, quote)
+            if span is None:
+                # Unterminated: the value cannot be told apart from what follows.
+                parts.append(f"{kept}{_REDACTED}")
+                pos = len(text)
+                break
+            parts.append(f"{kept}{_REDACTED}{text[span[0]:span[1]]}")
+            pos = span[1]
+            continue
+        value_start = scheme.end() if scheme else start
+        end = (_UNQUOTED_AUTH_RE if is_auth else _UNQUOTED_SECRET_RE).match(text, value_start).end()
+        if end == value_start:
+            pos = start  # A name with no value, as in "password: " at the end of a line.
+            continue
+        parts.append(f"{text[start:value_start]}{_REDACTED}")
+        pos = end
+    parts.append(text[pos:])
+    return "".join(parts)
 
 
 def _redact_text(value: str) -> str:
     if "://" in value:
         value = _URL_USERINFO_RE.sub(lambda m: f"{m.group(1)}{_REDACTED}@", value)
-    value = _AUTH_HEADER_RE.sub(_mask_auth_header, value)
+    # Bearer first: once a "token: Bearer x" name has been masked, the token
+    # after the scheme would no longer follow a recognisable name.
     value = _BEARER_RE.sub(lambda m: f"{m.group(1)}{_REDACTED}", value)
-    return _INLINE_SECRET_RE.sub(_mask_inline, value)
+    return _mask_inline_secrets(value)
 
 
 def _names_a_secret(item: dict) -> bool:
