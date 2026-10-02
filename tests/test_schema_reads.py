@@ -190,7 +190,7 @@ class NewReadRegistrationTests(unittest.IsolatedAsyncioTestCase):
         with patch("jsm_asset_mcp.server.AssetsClient", WorkspaceClient):
             server = create_server(Settings(read_only=True))
         names = {tool.name for tool in await server.list_tools()}
-        self.assertEqual(len(names), 15)
+        self.assertEqual(len(names), 21)
         self.assertTrue({"get_object_reference_info", "list_status_types", "list_reference_types", "get_usage"} <= names)
         self.assertFalse({"create_object", "update_object", "delete_object"} & names)
 

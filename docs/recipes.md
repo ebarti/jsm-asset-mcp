@@ -160,35 +160,75 @@ These are MCP tool calls, shown as `{ "tool": ..., "arguments": ... }` so you ca
 
 To rank owners by license count, call `execute_aql` for the relevant licenses, retrieve or inspect each object's owner values, and group the results in your MCP host or a separate script. The server does not expose grouping, ranking, CSV export, a scheduler, or an automation agent. Similarly, an impact assessment is a sequence of reference queries and ticket/object reads; it is not a single built-in graph traversal result.
 
+## Monitor imports
+
+These calls only read import configuration and results; none starts or changes an import. The IDs are fictional.
+
+26. List a schema's import sources to find an import source ID and see which ones run on a schedule. This uses an undocumented endpoint (see the [tool reference](tools.md)):
+
+```json
+{"tool":"list_import_sources","arguments":{"schema_id":"12"}}
+```
+
+27. Read one source's definition and schedule; its import-specific configuration is reduced to key names:
+
+```json
+{"tool":"get_import_source","arguments":{"import_source_id":"4f6c2d1e-8a3b-4c5d-9e7f-1a2b3c4d5e6f"}}
+```
+
+28. Check whether that source is idle, running, missing its mapping, or disabled:
+
+```json
+{"tool":"get_import_config_status","arguments":{"import_source_id":"4f6c2d1e-8a3b-4c5d-9e7f-1a2b3c4d5e6f"}}
+```
+
+29. See how its last run went: entries read, objects created, updated, identical, and errors per object type:
+
+```json
+{"tool":"get_last_import_execution","arguments":{"import_source_id":"4f6c2d1e-8a3b-4c5d-9e7f-1a2b3c4d5e6f"}}
+```
+
+30. Re-read a specific run using the `executionId` from the previous response:
+
+```json
+{"tool":"get_import_execution_status","arguments":{"import_source_id":"4f6c2d1e-8a3b-4c5d-9e7f-1a2b3c4d5e6f","execution_id":"<executionId returned by get_last_import_execution>"}}
+```
+
+31. Follow an import in progress, or see who ran the latest one and whether it was manual or scheduled. Pass the import source ID, not an execution ID:
+
+```json
+{"tool":"get_import_progress","arguments":{"import_source_id":"4f6c2d1e-8a3b-4c5d-9e7f-1a2b3c4d5e6f"}}
+```
+
 ## Controlled write example
 
 **The next calls change Jira data.** Use a disposable object type and a test workspace with write permission. The server itself has no confirmation or read-only enforcement. Discover a real object type ID and its required attribute IDs first. If your host or token is intended to be read-only, do not run this section.
 
-26. Create a disposable object. Replace fictional type/attribute IDs and values with fields accepted by your type:
+32. Create a disposable object. Replace fictional type/attribute IDs and values with fields accepted by your type:
 
 ```json
 {"tool":"create_object","arguments":{"object_type_id":"201","attributes":[{"objectTypeAttributeId":"301","objectAttributeValues":[{"value":"Disposable test laptop"}]}]}}
 ```
 
-27. Copy the `id` **returned by this create** into the next call and verify what Jira stored:
+33. Copy the `id` **returned by this create** into the next call and verify what Jira stored:
 
 ```json
 {"tool":"get_object","arguments":{"object_id":"<id returned by create_object>"}}
 ```
 
-28. Update only that disposable object, using the same returned object ID and its type ID:
+34. Update only that disposable object, using the same returned object ID and its type ID:
 
 ```json
 {"tool":"update_object","arguments":{"object_id":"<id returned by create_object>","object_type_id":"201","attributes":[{"objectTypeAttributeId":"301","objectAttributeValues":[{"value":"Disposable test laptop updated"}]}]}}
 ```
 
-29. Read its attributes to verify the update:
+35. Read its attributes to verify the update:
 
 ```json
 {"tool":"get_object_attributes","arguments":{"object_id":"<id returned by create_object>"}}
 ```
 
-30. Delete **only** that disposable returned ID after verification:
+36. Delete **only** that disposable returned ID after verification:
 
 ```json
 {"tool":"delete_object","arguments":{"object_id":"<id returned by create_object>"}}

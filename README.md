@@ -1,6 +1,6 @@
 # Jira Service Management Assets MCP server
 
-Connect Jira Cloud Assets to an MCP client. The server exposes **18 tools** for schema discovery, AQL search, object, reference and ticket reads, and object create/update/delete. `search_assets` can translate a natural-language question to AQL through the supported [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) runtimes. The MCP host (Claude Desktop, Claude Code, Codex, Gemini CLI, or another stdio client) is independent of the translation provider you select.
+Connect Jira Cloud Assets to an MCP client. The server exposes **24 tools** for schema discovery, AQL search, object, reference and ticket reads, import monitoring, and object create/update/delete. `search_assets` can translate a natural-language question to AQL through the supported [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) runtimes. The MCP host (Claude Desktop, Claude Code, Codex, Gemini CLI, or another stdio client) is independent of the translation provider you select.
 
 Read the [complete tool reference](docs/tools.md) and [26 concrete recipes](docs/recipes.md). The [Python stdio example](docs/examples/stdio_client.py) lists all tools **offline by default**; its two optional Jira commands are read-only.
 
@@ -15,7 +15,7 @@ uv sync --frozen
 uv run --frozen python docs/examples/stdio_client.py
 ```
 
-The last command starts `main.py` over MCP stdio, initializes a session, and prints 18 tool names. Without Jira credentials it makes no Jira or paid-provider request. `uv run --frozen main.py` starts the same server and waits for an MCP client; it is **not** an interactive prompt or HTTP server. Keep protocol output on stdout and operational logs on stderr.
+The last command starts `main.py` over MCP stdio, initializes a session, and prints 24 tool names. Without Jira credentials it makes no Jira or paid-provider request. `uv run --frozen main.py` starts the same server and waits for an MCP client; it is **not** an interactive prompt or HTTP server. Keep protocol output on stdout and operational logs on stderr.
 
 For explicit read-only requests, copy [the environment template](docs/examples/.env.example) to `.env` in the repository root, replace its placeholder values, and keep that file private. The repo ignores `.env`. Then run:
 
@@ -135,7 +135,7 @@ gemini extensions update jsm-asset-mcp
 
 ## Use the tools responsibly
 
-See [tool arguments and response semantics](docs/tools.md) and [inventory, lifecycle, incident, relationship, audit, and write recipes](docs/recipes.md). The server exposes **15 read-oriented tools and 3 write tools**. Set `JSM_READ_ONLY=true` to leave the write tools unregistered, or `JSM_WRITE_SCHEMA_IDS` to limit writes to listed object schemas; see [the write settings](docs/tools.md). The server never asks for approval before a write, so also restrict the host's tool allowlist and the Jira identity's permissions. The Python example only offers offline listing and two read-only calls.
+See [tool arguments and response semantics](docs/tools.md) and [inventory, lifecycle, incident, relationship, audit, and write recipes](docs/recipes.md). The server exposes **21 read-oriented tools and 3 write tools**, six of them for monitoring imports. Set `JSM_READ_ONLY=true` to leave the write tools unregistered, or `JSM_WRITE_SCHEMA_IDS` to limit writes to listed object schemas; see [the write settings](docs/tools.md). The server never asks for approval before a write, so also restrict the host's tool allowlist and the Jira identity's permissions. The Python example only offers offline listing and two read-only calls.
 
 `execute_aql` runs your AQL directly. Its default is one 25-object page; `fetch_all=true` calls total-count and pages until complete, within `JSM_FETCH_ALL_MAX_OBJECTS` (500 objects) and `JSM_MAX_RESULT_BYTES` (1 MiB), beyond which it returns an error rather than a truncated result. `search_assets` may return objects or an exact count based on the question, and its `_generated_aql` field lets you inspect the translation. A count question returns no object values. There is no separate count, grouping, ranking, export, or scheduling tool. To answer “which owner has the most licenses,” fetch the relevant objects and group their owner values in the host or another program; do not treat a natural-language question as a built-in aggregate query.
 
@@ -152,7 +152,7 @@ See [tool arguments and response semantics](docs/tools.md) and [inventory, lifec
 | Missing provider extra or model error | Keep the matching `--extra` in every host `uv run`; check provider credentials and that `LLM_MODEL` is supported by that provider. Omit it to use the runtime default. |
 | Natural-language tool times out | Raise the host's tool timeout beyond the translator's 90 seconds, especially for large schemas or multiple Jira pages. Check provider availability separately from Jira. |
 
-Local tests and simulated provider responses cover the runtime integration. A separate read-only Jira check covered discovery, schema/type/attribute reads, AQL/count, object attributes/history, and connected tickets; it did not authorize or exercise live writes. Live translation-provider calls were not part of that check. Replace all fictional names and IDs in the examples with your own schema values.
+Local tests and simulated provider responses cover the runtime integration. A separate read-only Jira check covered discovery, schema/type/attribute reads, AQL/count, object attributes/history, and connected tickets; the import-monitoring tools were checked read-only against a live workspace's CSV and Data Manager import sources; it did not authorize or exercise live writes. Live translation-provider calls were not part of that check. Replace all fictional names and IDs in the examples with your own schema values.
 
 ## Testing the provider contracts
 
