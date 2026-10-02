@@ -202,7 +202,7 @@ These calls only read import configuration and results; none starts or changes a
 
 ## Controlled write example
 
-**The next calls change Jira data.** Use a disposable object type and a test workspace with write permission. The server itself has no confirmation or read-only enforcement. Discover a real object type ID and its required attribute IDs first. If your host or token is intended to be read-only, do not run this section.
+**The next calls change Jira data.** Use a disposable object type and a test workspace with write permission. `JSM_READ_ONLY=true` leaves these write tools unregistered, and `JSM_WRITE_SCHEMA_IDS` can restrict their target schemas; the server does not ask for confirmation before a write. Discover a real object type ID and its required attribute IDs first. If your host or token is intended to be read-only, do not run this section.
 
 32. Create a disposable object. Replace fictional type/attribute IDs and values with fields accepted by your type:
 

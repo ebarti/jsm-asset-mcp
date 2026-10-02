@@ -28,7 +28,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         step = self.workflow.split("      - name: Verify release version\n", 1)[1]
         step = step.split("      - name: Build extension archive\n", 1)[0]
         script = step.split("python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
-        for tag, expected_returncode in (("v1.2.0", 0), ("v1.2.1", 1)):
+        for tag, expected_returncode in (("v1.3.0", 0), ("v1.3.1", 1)):
             with self.subTest(tag=tag):
                 result = subprocess.run(
                     [sys.executable, "-c", textwrap.dedent(script)],
@@ -59,7 +59,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 shutil.copy2(root / name, checkout / name)
             shutil.copytree(root / "jsm_asset_mcp", checkout / "jsm_asset_mcp", ignore=shutil.ignore_patterns("__pycache__"))
             shutil.copytree(root / "docs", checkout / "docs", ignore=shutil.ignore_patterns("__pycache__"))
-            env = {**os.environ, "GITHUB_REF_NAME": "v1.2.0"}
+            env = {**os.environ, "GITHUB_REF_NAME": "v1.3.0"}
             subprocess.run(
                 [sys.executable, "-c", textwrap.dedent(script)],
                 cwd=checkout,
@@ -69,7 +69,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 text=True,
             )
 
-            with tarfile.open(checkout / "dist" / "jsm-asset-mcp-v1.2.0.tar.gz", "r:gz") as archive:
+            with tarfile.open(checkout / "dist" / "jsm-asset-mcp-v1.3.0.tar.gz", "r:gz") as archive:
                 names = set(archive.getnames())
                 markdown = {
                     name: archive.extractfile(name).read().decode()

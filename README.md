@@ -2,7 +2,7 @@
 
 Connect Jira Cloud Assets to an MCP client. The server exposes **24 tools** for schema discovery, AQL search, object, reference and ticket reads, import monitoring, and object create/update/delete. `search_assets` can translate a natural-language question to AQL through the supported [agent-runtime-kit](https://github.com/ebarti/agent-runtime-kit) runtimes. The MCP host (Claude Desktop, Claude Code, Codex, Gemini CLI, or another stdio client) is independent of the translation provider you select.
 
-Read the [complete tool reference](docs/tools.md) and [26 concrete recipes](docs/recipes.md). The [Python stdio example](docs/examples/stdio_client.py) lists all tools **offline by default**; its two optional Jira commands are read-only.
+Read the [complete tool reference](docs/tools.md) and [36 concrete recipes](docs/recipes.md). The [Python stdio example](docs/examples/stdio_client.py) lists all tools **offline by default**; its two optional Jira commands are read-only.
 
 ## Install and check the connection
 
@@ -168,4 +168,4 @@ Replace `anthropic` with any of the other five exact names to run only that prov
 
 ## License and release notes
 
-MIT; see [LICENSE](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for v1.2.0 changes since v1.1.0.
+MIT; see [LICENSE](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for v1.3.0 changes since v1.2.0.
